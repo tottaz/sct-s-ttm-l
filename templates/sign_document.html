@@ -1,0 +1,32 @@
+<div style="margin-top: 3rem;">
+    <h3>Ask the AI Assistant</h3>
+    <textarea id="userQuestion" rows="4" cols="60" placeholder="e.g. What is this agreement about?"></textarea><br>
+    <button onclick="askAI()">Ask</button>
+    <p><strong>Answer:</strong> <span id="aiAnswer"></span></p>
+</div>
+
+<div id="signature" class="draggable">Signature</div>
+<script>
+interact('.draggable').draggable({
+  listeners: {
+    move (event) {
+      const target = event.target;
+      target.style.transform =
+        `translate(${event.pageX}px, ${event.pageY}px)`;
+    }
+  }
+});
+
+async function askAI() {
+    const question = document.getElementById("userQuestion").value;
+    const documentText = "Extracted text from PDF or summary"; // Placeholder
+
+    const res = await fetch("/api/ai-assist", {
+        method: "POST",
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ question, document_text: documentText })
+    });
+    const data = await res.json();
+    document.getElementById("aiAnswer").innerText = data.answer;
+}
+</script>

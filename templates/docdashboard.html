@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="mb-4">Upload Document</h2>
+    <form action="{{ url_for('signature.docupload') }}" method="POST" enctype="multipart/form-data" class="mb-5">
+        <div class="mb-3">
+            <label for="pdfFile" class="form-label">Upload PDF</label>
+            <input class="form-control" type="file" id="pdfFile" name="pdf_file" accept="application/pdf">
+        </div>
+        <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+
+    <h3>Your Documents</h3>
+    <table class="table table-bordered">
+        <thead>
+            <tr>
+                <th>Document</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Uploaded</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for doc in docs %}
+            <tr>
+                <td>{{ doc.filename }}</td>
+                <td>{{ doc.type }}</td>
+                <td>{{ doc.status }}</td>
+                <td>{{ doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else '' }}</td>
+                <td>
+                    <a href="{{ url_for('signature.docview', doc_id=doc.id) }}" class="btn btn-sm btn-info">View</a>
+                    <a href="{{ url_for('signature.docsign', doc_id=doc.id) }}" class="btn btn-sm btn-primary">Sign</a>
+                    <form action="{{ url_for('signature.docdelete', doc_id=doc.id) }}" method="POST" style="display:inline;">
+                        <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="5" class="text-center">No documents found.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
