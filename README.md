@@ -97,3 +97,12 @@ This license ensures openness, encourages collaboration, and maintains the integ
 
 Pull requests, ideas, and issues are always welcome.
 Please read the CONTRIBUTING.md (coming soon) before submitting major changes.
+
+
+# generate key once
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# copy the printed key
+
+# set it in your shell or .env
+export FERNET_KEY="PASTE_YOUR_KEY_HERE"
+

@@ -55,7 +55,6 @@
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
-  {% if document.type == 'pdf' %}
   // ---------- PDF.js Setup ----------
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.worker.min.js';
   const pdfUrl = "{{ url_for('signature.docuploaded_file', filename=document.filename) }}";
@@ -70,6 +69,7 @@ document.addEventListener("DOMContentLoaded", function() {
     document.getElementById("pageInfo").textContent = `Page ${currentPage} / ${doc.numPages}`;
     renderPage(currentPage);
   });
+
 
   function renderPage(pageNum) {
     pdfDocInstance.getPage(pageNum).then(page => {
@@ -223,7 +223,6 @@ document.addEventListener("DOMContentLoaded", function() {
     if(data.success) alert("Signed PDF saved: "+data.filename);
   });
 
-  {% endif %}
 });
 </script>
 {% endblock %}

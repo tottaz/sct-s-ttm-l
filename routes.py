@@ -7,14 +7,17 @@ from flask import (
     url_for,
     flash,
     send_file,
-    jsonify
+    jsonify,
+    abort
 )
 import os
+import io
 import uuid
 import base64
 import json
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from cryptography.fernet import Fernet
 
 from openai import OpenAI
 import ollama
@@ -31,6 +34,12 @@ with open(CONFIG_FILE, "r", encoding="utf-8") as f:
 USE_OPENAI = config.get("use_openai", True)
 OPENAI_API_KEY = config.get("openai_api_key")
 OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
+FERNET_KEY = config.get("fernet_key")
+if not FERNET_KEY:
+    raise RuntimeError("Fernet key missing from config!")
+
+# Generate a key once and store it securely (env var or config file)
+cipher = Fernet(FERNET_KEY)
 
 
 UPLOADS_DIR = os.path.join(os.getcwd(), "data", "uploads")
@@ -210,7 +219,20 @@ def docupload():
 @signature_bp.route('/docuploaded_file/<path:filename>')
 def docuploaded_file(filename):
     uploads_dir = os.path.join(os.getcwd(), "data", "uploads")
-    return send_from_directory(uploads_dir, filename)
+
+    # Loop through all .json meta files
+    for f in os.listdir(uploads_dir):
+        if f.endswith(".json"):
+            meta_path = os.path.join(uploads_dir, f)
+            with open(meta_path) as meta_file:
+                meta = json.load(meta_file)
+
+            if meta.get("original_filename") == filename:
+                stored_filename = meta.get("stored_filename")
+                if stored_filename and os.path.exists(os.path.join(uploads_dir, stored_filename)):
+                    return send_from_directory(uploads_dir, stored_filename)
+
+    abort(404, description=f"No stored file found for {filename}")
 
 
 # Sign document (draw signature)
@@ -294,57 +316,44 @@ def download_doc(doc_id):
     return send_file(file_path, as_attachment=True, download_name=meta.get("filename", doc_id))
 
 
-@signature_bp.route('/save_signed_pdf',
-                    methods=['POST'])
+@signature_bp.route("/save_signed_pdf", methods=["POST"])
 def save_signed_pdf():
-    import base64
-    pdf_data = request.json.get('pdf_base64')
-    original_filename = request.json.get('original_filename', 'document.pdf')
+    data = request.json
+    pdf_base64 = data.get("pdf_base64")
+    original_filename = data.get("original_filename")
 
-    if not pdf_data:
-        return {"error": "No PDF data received"}, 400
+    if not pdf_base64 or not original_filename:
+        return {"success": False, "error": "Missing data"}, 400
 
-    # Decode base64 PDF
-    pdf_bytes = base64.b64decode(pdf_data.split(",")[1])
+    file_id = str(uuid.uuid4())
+    # generate new signed filename
+    signed_filename = f"signed_{file_id}_{original_filename}"
+    signed_path = os.path.join(UPLOADS_DIR, signed_filename)
 
-    # Create a unique filename
-    signed_filename = f"signed_{uuid.uuid4()}_{original_filename}"
-    file_path = os.path.join("data/uploads", signed_filename)
-
-    # Save to disk
-    with open(file_path, "wb") as f:
+    # decode base64
+    pdf_bytes = base64.b64decode(pdf_base64.split(",")[1] if "," in pdf_base64 else pdf_base64)
+    with open(signed_path, "wb") as f:
         f.write(pdf_bytes)
 
+    # create meta file
+    # create meta file (use only the id in the meta filename)
+    meta_path = os.path.join(UPLOADS_DIR, f"signed_{file_id}.json")
+
+    meta = {
+        "id": f"signed_{file_id}",
+        "original_filename": original_filename,
+        "stored_filename": signed_filename,
+        "filename": original_filename,
+        "file_path": signed_path,   # better to store full path instead of just folder
+        "type": "pdf",
+        "status": "signed",
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
     return {"success": True, "filename": signed_filename}
-
-
-# Save drawn signature
-@signature_bp.route("/save_signature", methods=["POST"])
-def save_signature():
-    data = request.json
-    sig_data = data.get("signature")
-    doc_id = data.get("doc_id")
-
-    if not sig_data or not doc_id:
-        return {"success": False, "error": "Missing signature or document ID"}, 400
-
-    sig_id = f"{uuid.uuid4()}.png"
-    sig_path = os.path.join(SIGNATURES_DIR, sig_id)
-    os.makedirs(SIGNATURES_DIR, exist_ok=True)
-
-    with open(sig_path, "wb") as f:
-        f.write(base64.b64decode(sig_data.split(",")[1]))
-
-    # Update the document JSON to store signature path
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
-    if os.path.exists(meta_path):
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        meta["signature"] = sig_path
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
-
-    return {"success": True, "signature_url": url_for("signature.serve_signature", sig_id=sig_id)}
 
 
 # Analyse document (AI stub)
@@ -372,6 +381,38 @@ def analyze_doc(doc_id):
     return {"success": True, "analysis": analysis}
 
 
+# Save drawn signature
+@signature_bp.route("/save_signature", methods=["POST"])
+def save_signature():
+    data = request.json
+    sig_data = data.get("signature")
+    doc_id = data.get("doc_id")
+
+    if not sig_data or not doc_id:
+        return {"success": False, "error": "Missing signature or document ID"}, 400
+
+    sig_id = f"{uuid.uuid4()}.png"
+    sig_path = os.path.join(SIGNATURES_DIR, sig_id)
+    os.makedirs(SIGNATURES_DIR, exist_ok=True)
+
+    # decode and encrypt
+    raw_bytes = base64.b64decode(sig_data.split(",")[1])
+    encrypted = cipher.encrypt(raw_bytes)
+
+    with open(sig_path, "wb") as f:
+        f.write(encrypted)
+
+    # update document JSON
+    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    if os.path.exists(meta_path):
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["signature"] = sig_path
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+    return {"success": True, "signature_url": url_for("signature.serve_signature", sig_id=sig_id)}
+
 
 @signature_bp.route("/list_signatures")
 def list_signatures():
@@ -387,7 +428,18 @@ def serve_signature(sig_id):
     if not os.path.exists(sig_path):
         flash("Signature not found.", "danger")
         return redirect(url_for("signature.index"))
-    return send_file(sig_path, mimetype="image/png")
+
+    # read + decrypt
+    with open(sig_path, "rb") as f:
+        encrypted = f.read()
+    raw_bytes = cipher.decrypt(encrypted)
+
+    return send_file(
+        io.BytesIO(raw_bytes),
+        mimetype="image/png",
+        as_attachment=False,
+        download_name=sig_id
+    )
 
 
 @signature_bp.route("/serve/<doc_id>")
@@ -407,3 +459,26 @@ def serve_doc(doc_id):
 
     # Serve PDF inline
     return send_file(file_path, mimetype='application/pdf')
+
+
+@signature_bp.route("/download_signed/<doc_id>")
+def download_signed(doc_id):
+    # load your meta JSON
+    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    if not os.path.exists(meta_path):
+        flash("Document not found", "danger")
+        return redirect(url_for("signature.index"))
+
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    signed_path = meta.get("stored_filename")
+    if not signed_path or not os.path.exists(os.path.join(UPLOADS_DIR, signed_path)):
+        flash("Signed file not found", "danger")
+        return redirect(url_for("signature.index"))
+
+    return send_file(
+        os.path.join(UPLOADS_DIR, signed_path),
+        as_attachment=True,
+        download_name=meta.get("filename")
+    )

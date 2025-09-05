@@ -41,24 +41,36 @@
       <button id="analyzeDocument" class="btn btn-info w-100" data-bs-toggle="modal" data-bs-target="#analysisModal">Analyze Document</button>
     </div>
   </div>
+</div>
 
-  <!-- Analysis Modal -->
-  <div class="modal fade" id="analysisModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-      <div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">Document Analysis</h5></div>
-        <div class="modal-body" id="analysisResult">Loading...</div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+<!-- Modal -->
+<!-- Analysis Modal -->
+<div class="modal fade" id="analysisModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Document Analysis</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="analysisResult">
+        <div id="analysisSpinner" class="text-center">
+          <div class="spinner-border" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <p>Analyzing document...</p>
         </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" id="closeAnalysisModal">Close</button>
       </div>
     </div>
   </div>
-
 </div>
+
 {% endblock %}
 
 {% block script %}
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.0.0/dist/signature_pad.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib/dist/pdf-lib.min.js"></script>
@@ -71,6 +83,10 @@ document.addEventListener("DOMContentLoaded", function() {
   const pdfCanvas = document.getElementById("pdfCanvas");
   const pdfCtx = pdfCanvas.getContext("2d");
   const pdfContainer = document.getElementById("pdfContainer");
+  const modalEl = document.getElementById("analysisModal");
+  const analysisModal = new bootstrap.Modal(modalEl);
+  const resultDiv = document.getElementById("analysisResult");
+  const spinnerDiv = document.getElementById("analysisSpinner");
   let pdfDocInstance = null;
   let currentPage = 1;
 
@@ -82,12 +98,13 @@ document.addEventListener("DOMContentLoaded", function() {
 
   function renderPage(pageNum){
     pdfDocInstance.getPage(pageNum).then(page => {
-      const viewport = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: 1.5 });
       const scale = pdfContainer.clientWidth / viewport.width;
       const scaledViewport = page.getViewport({ scale });
       pdfCanvas.width = scaledViewport.width;
       pdfCanvas.height = scaledViewport.height;
       page.render({ canvasContext: pdfCtx, viewport: scaledViewport });
+      console.log(pdfContainer.clientWidth, viewport.width, scale);
       document.getElementById("pageInfo").textContent = `Page ${currentPage} / ${pdfDocInstance.numPages}`;
     });
   }
@@ -182,6 +199,16 @@ document.addEventListener("DOMContentLoaded", function() {
     sigPad.clear();
   });
 
+  async function getDecryptedPngAsDataUrl(url) {
+    const resp = await fetch(url);
+    const blob = await resp.blob(); // decrypted PNG blob from backend
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result); // will be "data:image/png;base64,...."
+        reader.readAsDataURL(blob);
+    });
+  }
+  
   // ---------- Save Signed PDF ----------
   function uint8ToBase64(uint8Array){ let binary=''; const chunkSize=0x8000; for(let i=0;i<uint8Array.length;i+=chunkSize){const chunk=uint8Array.subarray(i,i+chunkSize);binary+=String.fromCharCode.apply(null,chunk);} return btoa(binary); }
   document.getElementById("saveDocument").addEventListener("click", async ()=>{
@@ -190,15 +217,24 @@ document.addEventListener("DOMContentLoaded", function() {
     const pdfDoc = await PDFDocument.load(pdfBytes);
 
     if(sigPreview.src){
-      const pngImage = await pdfDoc.embedPng(sigPreview.src);
-      const page = pdfDoc.getPage(currentPage-1);
-      const pageDims = page.getSize();
-      page.drawImage(pngImage,{
-        x: parseFloat(dragDiv.style.left),
-        y: pageDims.height - parseFloat(dragDiv.style.top) - 50,
-        width:150,
-        height:50
-      });
+        const dataUrl = await getDecryptedPngAsDataUrl(sigPreview.src);
+        const pngImage = await pdfDoc.embedPng(dataUrl);
+        const page = pdfDoc.getPage(currentPage-1);
+        const pageDims = page.getSize();
+
+        // calculate PDF coordinates relative to canvas
+        const scaleX = pageDims.width / pdfCanvas.width;
+        const scaleY = pageDims.height / pdfCanvas.height;
+
+        const xPdf = parseFloat(dragDiv.style.left) * scaleX;
+        const yPdf = pageDims.height - (parseFloat(dragDiv.style.top) * scaleY) - (50 * scaleY); // adjust height if needed
+
+        page.drawImage(pngImage, {
+            x: xPdf,
+            y: yPdf,
+            width: 150 * scaleX,
+            height: 50 * scaleY
+        });
     }
 
     const pdfBytesSaved = await pdfDoc.save();
@@ -213,13 +249,46 @@ document.addEventListener("DOMContentLoaded", function() {
     if(data.success) alert("Signed PDF saved: "+data.filename);
   });
 
-  // ---------- Analyze Document ----------
-  document.getElementById("analyzeDocument").addEventListener("click", async ()=>{
-    const resultDiv = document.getElementById("analysisResult");
-    resultDiv.innerText="Analyzing...";
-    const resp = await fetch("{{ url_for('signature.analyze_doc', doc_id=document.id) }}");
-    const data = await resp.json();
-    resultDiv.innerText=data.analysis;
+  // Open modal and analyze
+  document.getElementById("analyzeDocument").addEventListener("click", async () => {
+    // Show modal
+    analysisModal.show();
+
+    // Show spinner
+    spinnerDiv.style.display = "block";
+    resultDiv.querySelector("p")?.remove(); // remove old result text if any
+
+    // Fetch analysis
+    try {
+      const resp = await fetch("{{ url_for('signature.analyze_doc', doc_id=document.id) }}");
+      const data = await resp.json();
+
+      // Hide spinner
+      spinnerDiv.style.display = "none";
+
+      // Show analysis
+      const p = document.createElement("p");
+      p.innerText = data.analysis;
+      resultDiv.appendChild(p);
+
+    } catch (err) {
+      spinnerDiv.style.display = "none";
+      const p = document.createElement("p");
+      p.innerText = "Error analyzing document.";
+      resultDiv.appendChild(p);
+    }
+  });
+
+  // Close modal with footer button
+  document.getElementById("closeAnalysisModal").addEventListener("click", () => {
+    analysisModal.hide();
+  });
+
+  // Optional: close modal after saving signed PDF
+  document.getElementById("saveDocument").addEventListener("click", async () => {
+    // ... your existing save PDF code ... 
+    // Close modal if open
+    analysisModal.hide();
   });
 });
 </script>

@@ -28,10 +28,15 @@
                 <td>{{ doc.filename }}</td>
                 <td>{{ doc.type }}</td>
                 <td>{{ doc.status }}</td>
-                <td>{{ doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else '' }}</td>
+                <td>
+                {% if doc.uploaded_at %}
+                    {{ doc.uploaded_at | todatetime |strftime('%Y-%m-%d %H:%M') }}
+                {% endif %}
+                </td>
                 <td>
                     <a href="{{ url_for('signature.docview', doc_id=doc.id) }}" class="btn btn-sm btn-info">View</a>
                     <a href="{{ url_for('signature.docsign', doc_id=doc.id) }}" class="btn btn-sm btn-primary">Sign</a>
+                    <a href="{{ url_for('signature.download_signed', doc_id=doc.id) }}" class="btn btn-sm btn-success">Download</a>
                     <form action="{{ url_for('signature.docdelete', doc_id=doc.id) }}" method="POST" style="display:inline;">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                     </form>

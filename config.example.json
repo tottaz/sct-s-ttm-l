@@ -4,5 +4,6 @@
     "use_openai": true,
     "openai_api_key": "YOUR_OPENAI_API_KEY",
     "ollama_base_url": "http://localhost:11434",
-    "delete_processed": false
+    "delete_processed": false,
+    "fernet_key": "YOUR_GENERATED_KEY_HERE"
 }
