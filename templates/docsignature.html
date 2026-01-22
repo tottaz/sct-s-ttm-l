@@ -1,49 +1,173 @@
 {% extends "base.html" %}
 
+{% block head %}
+<link
+  href="https://fonts.googleapis.com/css2?family=Alex+Brush&family=Dancing+Script&family=Great+Vibes&family=Sacramento&display=swap"
+  rel="stylesheet">
+{% endblock %}
+
 {% block content %}
 <div class="container py-4">
-  <h2 class="mb-4">Sign Document: {{ document.filename }}</h2>
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Sign Document: {{ document.filename }}</h2>
+    <a href="{{ url_for('signature.index') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+  </div>
 
-  <div class="d-flex">
-    <!-- PDF Canvas Container -->
-    <div class="flex-grow-1 position-relative" id="pdfContainer" style="min-height:600px; border:1px solid #ccc; overflow:auto;">
-      <canvas id="pdfCanvas" class="w-100"></canvas>
+  <div class="row">
+    <div class="col-lg-9">
+      <!-- PDF Canvas Container -->
+      <div class="position-relative shadow-sm bg-light" id="pdfContainer"
+        style="min-height:700px; border:1px solid #dee2e6; overflow:auto;">
+        <div id="viewerWrapper" style="position:relative; margin:auto; width:fit-content;">
+          <canvas id="pdfCanvas" class="d-block"></canvas>
 
-      <!-- Draggable Signature -->
-      <div id="draggableSignature" style="position:absolute; display:none; cursor:move; z-index:10;">
-        <img id="sigPreview" src="" style="width:150px; height:50px;">
-      </div>
+          <!-- Draggable Overlay Container -->
+          <div id="annotationOverlay"
+            style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;">
+            <!-- Active draggable element -->
+            <div id="activeDraggable" class="annotation-item"
+              style="position:absolute; display:none; cursor:move; z-index:100; pointer-events:auto; border:2px dashed #007bff; background: rgba(0, 123, 255, 0.1);">
+              <div id="activeContent"></div>
+              <div class="annotation-controls" style="position:absolute; top:-25px; right:0; display:flex; gap:2px;">
+                <button class="btn btn-xs btn-danger p-0 px-1" onclick="cancelPlacement()"
+                  style="font-size:10px;">✕</button>
+              </div>
+            </div>
+          </div>
+        </div>
 
-      <!-- Page Navigation -->
-      <div id="pageControls" class="position-absolute" style="bottom:10px; left:10px; background:rgba(255,255,255,0.8); padding:5px; border-radius:5px;">
-        <button id="prevPage" class="btn btn-sm btn-secondary">Prev</button>
-        <span id="pageInfo">Page 1 / 1</span>
-        <button id="nextPage" class="btn btn-sm btn-secondary">Next</button>
+        <!-- Page Navigation -->
+        <div id="pageControls" class="position-absolute shadow-sm"
+          style="bottom:20px; left:50%; transform:translateX(-50%); background:rgba(255,255,255,0.9); padding:8px 15px; border-radius:30px; z-index:50; border:1px solid #ddd;">
+          <div class="d-flex align-items-center gap-3">
+            <button id="prevPage" class="btn btn-sm btn-outline-dark rounded-circle">←</button>
+            <span id="pageInfo" class="fw-bold">Page 1 / 1</span>
+            <button id="nextPage" class="btn btn-sm btn-outline-dark rounded-circle">→</button>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- Signature Panel -->
-    <div id="signaturePanel" style="width:300px; margin-left:10px;">
-      <h5>Draw Your Signature</h5>
-      <div class="border mb-2" style="height:200px;">
-        <canvas id="signaturePad" style="width:100%; height:100%;"></canvas>
-      </div>
-      <div class="d-flex gap-2 mb-3">
-        <button id="clearSignature" class="btn btn-secondary btn-sm">Clear</button>
-        <button id="placeSignature" class="btn btn-primary btn-sm">Place</button>
+    <!-- Controls Panel -->
+    <div class="col-lg-3">
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-dark text-white">
+          <h5 class="mb-0">Sign & Annotate</h5>
+        </div>
+        <div class="card-body">
+          <ul class="nav nav-tabs mb-3" id="toolTabs" role="tablist">
+            <li class="nav-item">
+              <button class="nav-link active" id="sign-tab" data-bs-toggle="tab" data-bs-target="#sign"
+                type="button">Signature</button>
+            </li>
+            <li class="nav-item">
+              <button class="nav-link" id="text-tab" data-bs-toggle="tab" data-bs-target="#text"
+                type="button">Text</button>
+            </li>
+            <li class="nav-item">
+              <button class="nav-link" id="type-tab" data-bs-toggle="tab" data-bs-target="#type"
+                type="button">Type</button>
+            </li>
+          </ul>
+
+          <div class="tab-content" id="toolTabsContent">
+            <!-- Signature Tab -->
+            <div class="tab-pane fade show active" id="sign">
+              <div class="border rounded mb-2 bg-white" style="height:150px;">
+                <canvas id="signaturePad" style="width:100%; height:100%; touch-action: none;"></canvas>
+              </div>
+              <div class="d-grid gap-2 mb-3">
+                <div class="d-flex gap-2">
+                  <button id="clearSignature" class="btn btn-outline-secondary btn-sm flex-grow-1">Clear</button>
+                  <button id="placeSignature" class="btn btn-primary btn-sm flex-grow-1">Place Sig</button>
+                </div>
+                <button id="saveSignature" class="btn btn-outline-success btn-sm">Store for Reuse</button>
+              </div>
+
+              <h6 class="border-bottom pb-1 small text-uppercase text-muted">Reusable Signatures</h6>
+              <div id="savedSignatures" class="d-flex flex-wrap gap-2 mb-3" style="min-height: 40px;"></div>
+            </div>
+
+            <!-- Text Tab -->
+            <div class="tab-pane fade" id="text">
+              <div class="d-grid gap-2">
+                <button class="btn btn-outline-primary btn-sm text-start" onclick="prepareText('text')">
+                  <i class="bi bi-fonts"></i> Add Custom Text
+                </button>
+                <button class="btn btn-outline-primary btn-sm text-start" onclick="prepareText('date')">
+                  <i class="bi bi-calendar-event"></i> Add Current Date
+                </button>
+                <button class="btn btn-outline-primary btn-sm text-start" onclick="prepareText('number')">
+                  <i class="bi bi-hash"></i> Add Number
+                </button>
+              </div>
+              <div class="mt-3 p-2 bg-light rounded small text-muted">
+                Select a tool, then click on the document to place it.
+              </div>
+            </div>
+
+            <!-- Type Signature Tab -->
+            <div class="tab-pane fade" id="type">
+              <div class="mb-3">
+                <label class="form-label small text-muted text-uppercase fw-bold" style="font-size: 10px;">Type your
+                  name</label>
+                <input type="text" id="signatureTypeName" class="form-control form-control-sm" placeholder="Your Name">
+              </div>
+              <div id="signatureTypePreviews" class="d-grid gap-2" style="max-height: 250px; overflow-y: auto;">
+                <div class="text-center py-4 text-muted small">Enter your name above to see suggestions</div>
+              </div>
+            </div>
+          </div>
+
+          <hr>
+
+          <div class="d-grid gap-2">
+            <button id="saveDocument" class="btn btn-success">Save Signed PDF</button>
+            <button id="analyzeDocument" class="btn btn-info text-white">Quick Analysis</button>
+          </div>
+        </div>
       </div>
 
-      <h6>Saved Signatures</h6>
-      <div id="savedSignatures" class="d-flex flex-wrap gap-2 mb-2"></div>
-      <button id="saveSignature" class="btn btn-success btn-sm mb-2">Save Signature</button>
-
-      <button id="saveDocument" class="btn btn-warning w-100 mb-2">Save Signed PDF</button>
-      <button id="analyzeDocument" class="btn btn-info w-100" data-bs-toggle="modal" data-bs-target="#analysisModal">Analyze Document</button>
+      <div class="card shadow-sm">
+        <div class="card-header bg-secondary text-white py-2">
+          <small class="mb-0">Placed Annotations</small>
+        </div>
+        <div class="list-group list-group-flush small" id="placedList" style="max-height: 200px; overflow-y: auto;">
+          <div class="list-group-item text-center text-muted py-3">No items placed yet</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- Modal -->
+<!-- Text Input Modal -->
+<div class="modal fade" id="textInputModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title" id="annotationModalTitle">Enter Text</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"
+          style="font-size: 0.7rem;"></button>
+      </div>
+      <div class="modal-body py-3">
+        <div id="customTextInput" style="display:none;">
+          <input type="text" id="annotationText" class="form-control" placeholder="Type here...">
+        </div>
+        <div id="numberInput" style="display:none;">
+          <input type="text" id="annotationNumber" class="form-control"
+            placeholder="Enter number or code (e.g. 888-88)">
+        </div>
+        <div id="dateInput" style="display:none;">
+          <input type="date" id="annotationDate" class="form-control">
+        </div>
+      </div>
+      <div class="modal-footer py-1">
+        <button type="button" class="btn btn-sm btn-primary w-100" id="confirmText">Confirm</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Analysis Modal -->
 <div class="modal fade" id="analysisModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg">
@@ -61,236 +185,545 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" id="closeAnalysisModal">Close</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
   </div>
 </div>
 
+<style>
+  .annotation-item {
+    padding: 2px;
+  }
+
+  .placed-annotation {
+    position: absolute;
+    pointer-events: auto;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+
+  .placed-annotation:hover {
+    border: 1px dashed #007bff;
+    background: rgba(0, 123, 123, 0.05);
+  }
+
+  /* When placement is active, don't let existing items block the canvas */
+  body.placement-active .placed-annotation {
+    pointer-events: none !important;
+  }
+
+  .btn-xs {
+    padding: 0.1rem 0.3rem;
+    font-size: 0.75rem;
+  }
+
+  .sig-preview-item {
+    cursor: pointer;
+    border: 1px solid #dee2e6;
+    padding: 10px;
+    background: white;
+    transition: all 0.2s;
+    text-align: center;
+    border-radius: 4px;
+    font-size: 24px;
+    line-height: 1;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .sig-preview-item:hover {
+    background: #f8f9fa;
+    border-color: #007bff;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
+
+  .sig-preview-item.active {
+    border-color: #007bff;
+    background: #e7f1ff;
+  }
+</style>
 {% endblock %}
 
 {% block script %}
-<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.0.0/dist/signature_pad.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/pdf-lib/dist/pdf-lib.min.js"></script>
 
 <script>
-document.addEventListener("DOMContentLoaded", function() {
-  // ---------- PDF.js ----------
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.worker.min.js';
-  const pdfUrl = "{{ url_for('signature.docuploaded_file', filename=document.filename) }}";
-  const pdfCanvas = document.getElementById("pdfCanvas");
-  const pdfCtx = pdfCanvas.getContext("2d");
-  const pdfContainer = document.getElementById("pdfContainer");
-  const modalEl = document.getElementById("analysisModal");
-  const analysisModal = new bootstrap.Modal(modalEl);
-  const resultDiv = document.getElementById("analysisResult");
-  const spinnerDiv = document.getElementById("analysisSpinner");
-  let pdfDocInstance = null;
-  let currentPage = 1;
+  document.addEventListener("DOMContentLoaded", function () {
+    // ---------- PDF.js ----------
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.worker.min.js';
+    const pdfUrl = "{{ url_for('signature.docuploaded_file', filename=document.filename) }}";
+    const pdfCanvas = document.getElementById("pdfCanvas");
+    const pdfCtx = pdfCanvas.getContext("2d");
+    const pdfContainer = document.getElementById("pdfContainer");
+    const viewerWrapper = document.getElementById("viewerWrapper");
+    const annotationOverlay = document.getElementById("annotationOverlay");
+    const activeDraggable = document.getElementById("activeDraggable");
+    const activeContent = document.getElementById("activeContent");
 
-  pdfjsLib.getDocument(pdfUrl).promise.then(doc => {
-    pdfDocInstance = doc;
-    document.getElementById("pageInfo").textContent = `Page ${currentPage} / ${doc.numPages}`;
-    renderPage(currentPage);
-  });
+    let pdfDocInstance = null;
+    let currentPage = 1;
+    let annotations = []; // List of placed annotations: {type, content, x, y, page, width, height}
+    let currentTool = null; // {type, content}
 
-  function renderPage(pageNum){
-    pdfDocInstance.getPage(pageNum).then(page => {
-      const viewport = page.getViewport({ scale: 1.5 });
-      const scale = pdfContainer.clientWidth / viewport.width;
-      const scaledViewport = page.getViewport({ scale });
-      pdfCanvas.width = scaledViewport.width;
-      pdfCanvas.height = scaledViewport.height;
-      page.render({ canvasContext: pdfCtx, viewport: scaledViewport });
-      console.log(pdfContainer.clientWidth, viewport.width, scale);
-      document.getElementById("pageInfo").textContent = `Page ${currentPage} / ${pdfDocInstance.numPages}`;
+    const textModal = new bootstrap.Modal(document.getElementById('textInputModal'));
+    const analysisModal = new bootstrap.Modal(document.getElementById('analysisModal'));
+
+    // Load PDF
+    pdfjsLib.getDocument(pdfUrl).promise.then(doc => {
+      pdfDocInstance = doc;
+      document.getElementById("pageInfo").textContent = `Page ${currentPage} / ${doc.numPages}`;
+      renderPage(currentPage);
     });
-  }
 
-  document.getElementById("prevPage").addEventListener("click", () => {
-    if(currentPage>1){ currentPage--; renderPage(currentPage); }
-  });
-  document.getElementById("nextPage").addEventListener("click", () => {
-    if(currentPage<pdfDocInstance.numPages){ currentPage++; renderPage(currentPage); }
-  });
+    function renderPage(pageNum) {
+      pdfDocInstance.getPage(pageNum).then(page => {
+        const viewport = page.getViewport({ scale: 1.5 });
+        const scale = (pdfContainer.clientWidth - 40) / viewport.width;
+        const scaledViewport = page.getViewport({ scale });
 
-  // ---------- Signature Pad ----------
-  const sigCanvas = document.getElementById("signaturePad");
-  const sigPad = new SignaturePad(sigCanvas);
-  document.getElementById("clearSignature").addEventListener("click", () => sigPad.clear());
+        pdfCanvas.width = scaledViewport.width;
+        pdfCanvas.height = scaledViewport.height;
+        viewerWrapper.style.width = scaledViewport.width + 'px';
+        viewerWrapper.style.height = scaledViewport.height + 'px';
 
-  const dragDiv = document.getElementById("draggableSignature");
-  const sigPreview = document.getElementById("sigPreview");
-  const savedContainer = document.getElementById("savedSignatures");
-  let isDragging=false, offsetX=0, offsetY=0;
+        page.render({ canvasContext: pdfCtx, viewport: scaledViewport }).promise.then(() => {
+          renderAnnotations();
+        });
 
-  document.getElementById("placeSignature").addEventListener("click", ()=>{
-    if(sigPad.isEmpty()) return;
-    sigPreview.src = sigPad.toDataURL();
-    dragDiv.style.display = "block";
-    dragDiv.style.left = "20px"; dragDiv.style.top="20px";
-  });
-
-  dragDiv.addEventListener("mousedown", e => { isDragging=true; offsetX=e.offsetX; offsetY=e.offsetY; });
-  document.addEventListener("mousemove", e => {
-    if(!isDragging) return;
-    const rect = pdfContainer.getBoundingClientRect();
-    dragDiv.style.left = Math.max(0, e.pageX-rect.left-offsetX)+"px";
-    dragDiv.style.top = Math.max(0, e.pageY-rect.top-offsetY)+"px";
-  });
-  document.addEventListener("mouseup", ()=>isDragging=false);
-
-  // ---------- Save Signature ----------
-  document.getElementById("saveSignature").addEventListener("click", async ()=>{
-    if(sigPad.isEmpty()) return alert("Draw signature first");
-    const resp = await fetch("{{ url_for('signature.save_signature') }}", {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({signature:sigPad.toDataURL(), doc_id:"{{ document.id }}"})
-    });
-    const data = await resp.json();
-    if(data.success){
-      alert("Signature saved!");
-      sigPreview.src = data.signature_url;
-      dragDiv.style.display="block";
-      dragDiv.style.left="20px"; dragDiv.style.top="20px";
-      loadSavedSignatures(); // refresh panel
+        document.getElementById("pageInfo").textContent = `Page ${currentPage} / ${pdfDocInstance.numPages}`;
+      });
     }
-  });
 
-  // ---------- Load Saved Signatures ----------
-  async function loadSavedSignatures(){
-    savedContainer.innerHTML = "";
+    function renderAnnotations() {
+      // Clear existing UI elements for placed annotations
+      document.querySelectorAll('.placed-annotation').forEach(el => el.remove());
 
-    // Fetch saved signatures from your backend endpoint
-    const resp = await fetch("{{ url_for('signature.list_signatures') }}");
-    const sigs = await resp.json();
+      annotations.filter(ann => ann.page === currentPage).forEach((ann, index) => {
+        const div = document.createElement('div');
+        div.className = 'placed-annotation';
+        div.style.left = ann.x + 'px';
+        div.style.top = ann.y + 'px';
+        div.style.width = ann.width + 'px';
+        div.style.height = ann.height + 'px';
 
-    sigs.forEach(sig => {
-      const img = document.createElement("img");
-      img.src = "{{ url_for('signature.serve_signature', sig_id='') }}" + sig.id; // adapt to sig.id from backend
-      img.style.width = "100px";
-      img.style.height = "40px";
-      img.style.cursor = "pointer";
+        if (ann.type === 'signature') {
+          const img = document.createElement('img');
+          img.src = ann.content;
+          img.style.width = '100%';
+          img.style.height = '100%';
+          div.appendChild(img);
+        } else {
+          div.style.display = 'flex';
+          div.style.alignItems = 'center';
+          div.style.padding = '2px 5px';
+          div.style.fontSize = '16px';
+          div.style.fontFamily = 'serif';
+          div.textContent = ann.content;
+        }
 
-      img.addEventListener("click", () => {
-        sigPreview.src = img.src;
-        dragDiv.style.display = "block";
-        dragDiv.style.left = "20px";
-        dragDiv.style.top = "20px";
+        // Delete button for placed items
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-xs btn-danger p-0 px-1 position-absolute';
+        delBtn.style.top = '-20px';
+        delBtn.style.right = '0';
+        delBtn.style.display = 'none';
+        delBtn.textContent = '✕';
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          annotations.splice(index, 1);
+          renderAnnotations();
+          updateAnnotationList();
+        };
+        div.onmouseenter = () => delBtn.style.display = 'block';
+        div.onmouseleave = () => delBtn.style.display = 'none';
+        div.appendChild(delBtn);
+
+        annotationOverlay.appendChild(div);
+      });
+    }
+
+    function updateAnnotationList() {
+      const list = document.getElementById('placedList');
+      list.innerHTML = "";
+      if (annotations.length === 0) {
+        list.innerHTML = '<div class="list-group-item text-center text-muted py-3">No items placed yet</div>';
+        return;
+      }
+
+      annotations.forEach((ann, idx) => {
+        const item = document.createElement('div');
+        item.className = 'list-group-item d-flex justify-content-between align-items-center';
+        item.innerHTML = `
+              <span>${ann.type.charAt(0).toUpperCase() + ann.type.slice(1)} (p.${ann.page})</span>
+              <button class="btn btn-link btn-sm text-danger p-0" onclick="removeAnnotation(${idx})">Remove</button>
+          `;
+        list.appendChild(item);
+      });
+    }
+
+    window.removeAnnotation = function (idx) {
+      annotations.splice(idx, 1);
+      renderAnnotations();
+      updateAnnotationList();
+    };
+
+    document.getElementById("prevPage").addEventListener("click", () => {
+      if (currentPage > 1) { currentPage--; renderPage(currentPage); }
+    });
+    document.getElementById("nextPage").addEventListener("click", () => {
+      if (currentPage < pdfDocInstance.numPages) { currentPage++; renderPage(currentPage); }
+    });
+
+    // ---------- Signature Pad ----------
+    const sigCanvas = document.getElementById("signaturePad");
+    // Optimization: minDistance: 0 and throttle: 16 for better responsiveness
+    const sigPad = new SignaturePad(sigCanvas, {
+      minDistance: 0,
+      throttle: 16,
+      penColor: "rgb(0, 0, 0)"
+    });
+
+    // Resize signature pad
+    function resizeSigPad() {
+      const ratio = Math.max(window.devicePixelRatio || 1, 1);
+      sigCanvas.width = sigCanvas.offsetWidth * ratio;
+      sigCanvas.height = sigCanvas.offsetHeight * ratio;
+      sigCanvas.getContext("2d").scale(ratio, ratio);
+      sigPad.clear();
+    }
+    window.addEventListener("resize", resizeSigPad);
+    resizeSigPad();
+
+    document.getElementById("clearSignature").addEventListener("click", () => sigPad.clear());
+
+    document.getElementById("placeSignature").addEventListener("click", () => {
+      if (sigPad.isEmpty()) return;
+      preparePlacement('signature', sigPad.toDataURL());
+      sigPad.clear();
+    });
+
+    // ---------- Type-to-Sign Logic ----------
+    const typeInput = document.getElementById("signatureTypeName");
+    const previewsContainer = document.getElementById("signatureTypePreviews");
+    const signatureFonts = [
+      { name: 'Dancing Script', family: "'Dancing Script', cursive" },
+      { name: 'Alex Brush', family: "'Alex Brush', cursive" },
+      { name: 'Great Vibes', family: "'Great Vibes', cursive" },
+      { name: 'Sacramento', family: "'Sacramento', cursive" }
+    ];
+
+    typeInput.addEventListener("input", () => {
+      const name = typeInput.value.trim();
+      if (!name) {
+        previewsContainer.innerHTML = '<div class="text-center py-4 text-muted small">Enter your name above to see suggestions</div>';
+        return;
+      }
+
+      previewsContainer.innerHTML = "";
+      signatureFonts.forEach(font => {
+        const div = document.createElement("div");
+        div.className = "sig-preview-item";
+        div.style.fontFamily = font.family;
+        div.textContent = name;
+        div.onclick = () => {
+          const dataUrl = captureFontAsImage(name, font.family);
+          preparePlacement('signature', dataUrl);
+        };
+        previewsContainer.appendChild(div);
+      });
+    });
+
+    function captureFontAsImage(text, font) {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      canvas.width = 450;
+      canvas.height = 150;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "black";
+      ctx.font = `42px ${font}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+      return canvas.toDataURL("image/png");
+    }
+
+    // ---------- Text/Date/Number tools ----------
+    window.prepareText = function (type) {
+      document.getElementById('customTextInput').style.display = type === 'text' ? 'block' : 'none';
+      document.getElementById('numberInput').style.display = type === 'number' ? 'block' : 'none';
+      document.getElementById('dateInput').style.display = type === 'date' ? 'block' : 'none';
+
+      const titleMap = { 'text': 'Enter Custom Text', 'number': 'Enter Number', 'date': 'Select Date' };
+      document.getElementById('annotationModalTitle').textContent = titleMap[type] || 'Enter Details';
+
+      if (type === 'date') {
+        document.getElementById('annotationDate').valueAsDate = new Date();
+      }
+
+      currentTool = { type: type };
+      textModal.show();
+
+      // Focus the input when modal is shown
+      setTimeout(() => {
+        if (type === 'text') document.getElementById('annotationText').focus();
+        else if (type === 'number') document.getElementById('annotationNumber').focus();
+      }, 500);
+    };
+
+    document.getElementById('confirmText').addEventListener('click', () => {
+      let content = "";
+      if (currentTool.type === 'text') content = document.getElementById('annotationText').value;
+      if (currentTool.type === 'text') content = document.getElementById('annotationText').value;
+      else if (currentTool.type === 'number') content = document.getElementById('annotationNumber').value;
+      else if (currentTool.type === 'date') content = document.getElementById('annotationDate').value;
+
+      if (content !== "") {
+        preparePlacement(currentTool.type, content);
+        textModal.hide();
+      }
+    });
+
+    function preparePlacement(type, content) {
+      currentTool = { type, content };
+      activeContent.innerHTML = "";
+
+      if (type === 'signature') {
+        const img = document.createElement('img');
+        img.src = content;
+        img.style.width = '150px';
+        img.style.height = '50px';
+        activeContent.appendChild(img);
+        activeDraggable.style.width = '150px';
+        activeDraggable.style.height = '50px';
+      } else {
+        activeContent.textContent = content;
+        activeContent.style.padding = '2px 5px';
+        activeContent.style.fontSize = '16px';
+        activeContent.style.fontFamily = 'serif';
+        activeDraggable.style.width = 'auto';
+        activeDraggable.style.height = 'auto';
+      }
+
+      activeDraggable.style.display = "block";
+      activeDraggable.style.left = "50px";
+      activeDraggable.style.top = "50px";
+      document.body.classList.add('placement-active');
+    }
+
+    window.cancelPlacement = function () {
+      activeDraggable.style.display = "none";
+      currentTool = null;
+      document.body.classList.remove('placement-active');
+    };
+
+    // ---------- Dragging Logic ----------
+    let isDragging = false;
+    let dragOffset = { x: 0, y: 0 };
+
+    activeDraggable.addEventListener("mousedown", e => {
+      isDragging = true;
+      const rect = activeDraggable.getBoundingClientRect();
+      dragOffset.x = e.clientX - rect.left;
+      dragOffset.y = e.clientY - rect.top;
+      e.stopPropagation();
+    });
+
+    document.addEventListener("mousemove", e => {
+      if (!isDragging) return;
+
+      const wrapperRect = viewerWrapper.getBoundingClientRect();
+
+      let x = e.clientX - wrapperRect.left - dragOffset.x;
+      let y = e.clientY - wrapperRect.top - dragOffset.y;
+
+      // Boundary checks
+      x = Math.max(0, Math.min(x, pdfCanvas.width - 20)); // Keep a sliver inside
+      y = Math.max(0, Math.min(y, pdfCanvas.height - 20));
+
+      activeDraggable.style.left = x + "px";
+      activeDraggable.style.top = y + "px";
+    });
+
+    document.addEventListener("mouseup", () => {
+      isDragging = false;
+    });
+
+    // Clicking on canvas OR the draggable itself places the active item
+    function placeActiveItem() {
+      if (activeDraggable.style.display !== "block") return;
+
+      const rect = activeDraggable.getBoundingClientRect();
+      const wrapperRect = viewerWrapper.getBoundingClientRect();
+
+      // Store annotation
+      annotations.push({
+        type: currentTool.type,
+        content: currentTool.content,
+        x: rect.left - wrapperRect.left,
+        y: rect.top - wrapperRect.top,
+        page: currentPage,
+        width: rect.width,
+        height: rect.height
       });
 
-      savedContainer.appendChild(img);
-    });
-  }
-
-  loadSavedSignatures();
-
-  // ---------- Place Signature on PDF ----------
-  pdfCanvas.addEventListener("click", () => {
-    if(dragDiv.style.display !== "block") return;
-    const x = parseFloat(dragDiv.style.left) || 0;
-    const y = parseFloat(dragDiv.style.top) || 0;
-    const dpr = window.devicePixelRatio || 1;
-    pdfCtx.drawImage(sigPreview, Math.floor(x*dpr), Math.floor(y*dpr), 150*dpr, 50*dpr);
-    dragDiv.style.display = "none";
-    sigPad.clear();
-  });
-
-  async function getDecryptedPngAsDataUrl(url) {
-    const resp = await fetch(url);
-    const blob = await resp.blob(); // decrypted PNG blob from backend
-    return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result); // will be "data:image/png;base64,...."
-        reader.readAsDataURL(blob);
-    });
-  }
-  
-  // ---------- Save Signed PDF ----------
-  function uint8ToBase64(uint8Array){ let binary=''; const chunkSize=0x8000; for(let i=0;i<uint8Array.length;i+=chunkSize){const chunk=uint8Array.subarray(i,i+chunkSize);binary+=String.fromCharCode.apply(null,chunk);} return btoa(binary); }
-  document.getElementById("saveDocument").addEventListener("click", async ()=>{
-    const { PDFDocument } = PDFLib;
-    const pdfBytes = await fetch(pdfUrl).then(r=>r.arrayBuffer());
-    const pdfDoc = await PDFDocument.load(pdfBytes);
-
-    if(sigPreview.src){
-        const dataUrl = await getDecryptedPngAsDataUrl(sigPreview.src);
-        const pngImage = await pdfDoc.embedPng(dataUrl);
-        const page = pdfDoc.getPage(currentPage-1);
-        const pageDims = page.getSize();
-
-        // calculate PDF coordinates relative to canvas
-        const scaleX = pageDims.width / pdfCanvas.width;
-        const scaleY = pageDims.height / pdfCanvas.height;
-
-        const xPdf = parseFloat(dragDiv.style.left) * scaleX;
-        const yPdf = pageDims.height - (parseFloat(dragDiv.style.top) * scaleY) - (50 * scaleY); // adjust height if needed
-
-        page.drawImage(pngImage, {
-            x: xPdf,
-            y: yPdf,
-            width: 150 * scaleX,
-            height: 50 * scaleY
-        });
+      activeDraggable.style.display = "none";
+      currentTool = null;
+      document.body.classList.remove('placement-active');
+      renderAnnotations();
+      updateAnnotationList();
     }
 
-    const pdfBytesSaved = await pdfDoc.save();
-    const pdfBase64 = 'data:application/pdf;base64,' + uint8ToBase64(new Uint8Array(pdfBytesSaved));
-
-    const resp = await fetch("{{ url_for('signature.save_signed_pdf') }}", {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({pdf_base64:pdfBase64, original_filename:"{{ document.filename }}"})
+    pdfCanvas.addEventListener("click", placeActiveItem);
+    activeDraggable.addEventListener("click", (e) => {
+      // Only place if we were not dragging
+      if (!isDragging) {
+        placeActiveItem();
+      }
     });
-    const data = await resp.json();
-    if(data.success) alert("Signed PDF saved: "+data.filename);
-  });
 
-  // Open modal and analyze
-  document.getElementById("analyzeDocument").addEventListener("click", async () => {
-    // Show modal
-    analysisModal.show();
-
-    // Show spinner
-    spinnerDiv.style.display = "block";
-    resultDiv.querySelector("p")?.remove(); // remove old result text if any
-
-    // Fetch analysis
-    try {
-      const resp = await fetch("{{ url_for('signature.analyze_doc', doc_id=document.id) }}");
+    // ---------- Storage logic ----------
+    document.getElementById("saveSignature").addEventListener("click", async () => {
+      if (sigPad.isEmpty()) return alert("Draw signature first");
+      const resp = await fetch("{{ url_for('signature.save_signature') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signature: sigPad.toDataURL(), doc_id: "{{ document.id }}" })
+      });
       const data = await resp.json();
+      if (data.success) {
+        alert("Signature saved!");
+        loadSavedSignatures();
+      }
+    });
 
-      // Hide spinner
-      spinnerDiv.style.display = "none";
+    async function loadSavedSignatures() {
+      const savedContainer = document.getElementById("savedSignatures");
+      savedContainer.innerHTML = "";
+      const resp = await fetch("{{ url_for('signature.list_signatures') }}");
+      const sigs = await resp.json();
 
-      // Show analysis
-      const p = document.createElement("p");
-      p.innerText = data.analysis;
-      resultDiv.appendChild(p);
+      sigs.forEach(sig => {
+        const img = document.createElement("img");
+        img.src = "{{ url_for('signature.serve_signature', sig_id='') }}" + sig.id;
+        img.className = "img-thumbnail p-1";
+        img.style.width = "80px";
+        img.style.height = "30px";
+        img.style.cursor = "pointer";
+        img.title = "Click to use";
 
-    } catch (err) {
-      spinnerDiv.style.display = "none";
-      const p = document.createElement("p");
-      p.innerText = "Error analyzing document.";
-      resultDiv.appendChild(p);
+        img.addEventListener("click", async () => {
+          const dataUrl = await getDecryptedPngAsDataUrl(img.src);
+          preparePlacement('signature', dataUrl);
+        });
+        savedContainer.appendChild(img);
+      });
     }
-  });
 
-  // Close modal with footer button
-  document.getElementById("closeAnalysisModal").addEventListener("click", () => {
-    analysisModal.hide();
-  });
+    async function getDecryptedPngAsDataUrl(url) {
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    }
 
-  // Optional: close modal after saving signed PDF
-  document.getElementById("saveDocument").addEventListener("click", async () => {
-    // ... your existing save PDF code ... 
-    // Close modal if open
-    analysisModal.hide();
+    loadSavedSignatures();
+
+    // ---------- PDF Embedding (pdf-lib) ----------
+    document.getElementById("saveDocument").addEventListener("click", async () => {
+      if (annotations.length === 0) return alert("No signatures or annotations were added.");
+
+      const { PDFDocument, rgb, StandardFonts } = PDFLib;
+      const pdfBytes = await fetch(pdfUrl).then(r => r.arrayBuffer());
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const timesRomanFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+
+      for (const ann of annotations) {
+        const page = pdfDoc.getPage(ann.page - 1);
+        const { width, height } = page.getSize();
+
+        // PDF units are usually 1/72 inch, and coordinate (0,0) is bottom-left
+        const scaleX = width / pdfCanvas.width;
+        const scaleY = height / pdfCanvas.height;
+
+        if (ann.type === 'signature') {
+          const pngImage = await pdfDoc.embedPng(ann.content);
+          page.drawImage(pngImage, {
+            x: ann.x * scaleX,
+            y: height - (ann.y * scaleY) - (ann.height * scaleY),
+            width: ann.width * scaleX,
+            height: ann.height * scaleY
+          });
+        } else {
+          // Draw text
+          page.drawText(ann.content, {
+            x: ann.x * scaleX,
+            y: height - (ann.y * scaleY) - (ann.height * scaleY) + 4, // slight adjustment for baseline
+            size: 16 * scaleY,
+            font: timesRomanFont,
+            color: rgb(0, 0, 0),
+          });
+        }
+      }
+
+      const pdfBytesSaved = await pdfDoc.save();
+
+      // Convert to base64 for backend saving
+      function uint8ToBase64(u8) {
+        let b = '';
+        for (let i = 0; i < u8.length; i++) b += String.fromCharCode(u8[i]);
+        return btoa(b);
+      }
+      const pdfBase64 = 'data:application/pdf;base64,' + uint8ToBase64(new Uint8Array(pdfBytesSaved));
+
+      const resp = await fetch("{{ url_for('signature.save_signed_pdf') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdf_base64: pdfBase64, original_filename: "{{ document.filename }}" })
+      });
+
+      const data = await resp.json();
+      if (data.success) {
+        alert("Success! Signed document saved: " + data.filename);
+        window.location.href = "{{ url_for('signature.index') }}";
+      } else {
+        alert("Error saving: " + data.error);
+      }
+    });
+
+    // ---------- Analysis Modal ----------
+    document.getElementById("analyzeDocument").addEventListener("click", async () => {
+      analysisModal.show();
+      const resultDiv = document.getElementById("analysisResult");
+      const spinner = document.getElementById("analysisSpinner");
+      spinner.style.display = "block";
+      resultDiv.innerHTML = spinner.outerHTML;
+
+      try {
+        const resp = await fetch("{{ url_for('signature.analyze_doc', doc_id=document.id) }}", {
+          headers: { 'Accept': 'application/json' }
+        });
+        const data = await resp.json();
+        spinner.style.display = "none";
+
+        if (data.success) {
+          resultDiv.innerHTML = `<div class="analysis-text">${data.analysis}</div>`;
+        } else {
+          resultDiv.innerHTML = `<p class="text-danger">Analysis error: ${data.analysis}</p>`;
+        }
+      } catch (err) {
+        resultDiv.innerHTML = `<p class="text-danger">Failed to connect to analysis service.</p>`;
+      }
+    });
   });
-});
 </script>
-
 {% endblock %}

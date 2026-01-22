@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Document Analysis</h2>
+        <a href="{{ url_for('signature.index') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+    </div>
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card mb-4">
+                <div class="card-header bg-dark text-white">
+                    Document Info
+                </div>
+                <div class="card-body">
+                    <p><strong>Filename:</strong> {{ doc.filename }}</p>
+                    <p><strong>Type:</strong> {{ doc.type | upper }}</p>
+                    <p><strong>Status:</strong> <span class="badge bg-info text-dark">{{ doc.status }}</span></p>
+                    <p><strong>Uploaded:</strong> {{ (doc.uploaded_at | todatetime).strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else 'N/A' }}</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    Analyse Again
+                </div>
+                <div class="card-body">
+                    <form action="{{ url_for('signature.analyze_doc', doc_id=doc.id) }}" method="POST">
+                        <div class="mb-3">
+                            <label for="language" class="form-label">Language</label>
+                            <select class="form-select" id="language" name="language">
+                                <option value="English" {% if doc.analysis_language == 'English' %}selected{% endif %}>English</option>
+                                <option value="Swedish" {% if doc.analysis_language == 'Swedish' %}selected{% endif %}>Swedish</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="style" class="form-label">Style</label>
+                            <select class="form-select" id="style" name="style">
+                                <option value="layman" {% if doc.analysis_style == 'layman' %}selected{% endif %}>Layman Terms</option>
+                                <option value="professional" {% if doc.analysis_style == 'professional' %}selected{% endif %}>Professional</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100">
+                            {% if analysis %}Re-analyse{% else %}Analyse{% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white">
+                    <h4 class="mb-0">Layman Summary</h4>
+                </div>
+                <div class="card-body" id="analysis-content">
+                    {% if analysis %}
+                        <div class="analysis-result">
+                            {{ analysis | safe }}
+                        </div>
+                    {% elif doc.analysis %}
+                         <div class="analysis-result">
+                            {{ doc.analysis | safe }}
+                        </div>
+                    {% else %}
+                        <div class="text-center py-5">
+                            <p class="text-muted">No analysis generated yet. Use the sidebar to start the analysis.</p>
+                        </div>
+                    {% endif %}
+                </div>
+                {% if analysis or doc.analysis %}
+                <div class="card-footer bg-light d-flex justify-content-end">
+                    <button class="btn btn-sm btn-outline-primary me-2" onclick="copyAnalysis()">Copy to Clipboard</button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block script %}
+{{ super() }}
+<script>
+function copyAnalysis() {
+    const content = document.querySelector('.analysis-result').innerText;
+    navigator.clipboard.writeText(content).then(() => {
+        alert('Analysis copied to clipboard!');
+    });
+}
+</script>
+<style>
+.analysis-result h1, .analysis-result h2, .analysis-result h3 {
+    margin-top: 1.5rem;
+    margin-bottom: 1rem;
+    font-weight: 600;
+}
+.analysis-result ul, .analysis-result ol {
+    margin-bottom: 1rem;
+}
+.analysis-result li {
+    margin-bottom: 0.5rem;
+}
+</style>
+{% endblock %}

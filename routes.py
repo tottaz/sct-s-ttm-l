@@ -12,38 +12,86 @@ from flask import (
 )
 import os
 import io
+import sys
 import uuid
 import base64
 import json
+import shutil
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
 
 from openai import OpenAI
 import ollama
+import docx
+import markdown
+import pdfplumber
 
 signature_bp = Blueprint("signature", __name__,
                          template_folder="templates",
                          static_folder="static")
 
-CONFIG_FILE = os.path.join(os.getcwd(), "config.json")
+def get_data_dir():
+    """Get a writable directory for application data."""
+    if getattr(sys, 'frozen', False):
+        # Running in a bundle (e.g., PyInstaller)
+        if sys.platform == 'darwin':
+            # macOS: ~/Library/Application Support/Sattmal
+            base_dir = os.path.expanduser('~/Library/Application Support/Sattmal')
+        else:
+            # Fallback for other platforms if needed
+            base_dir = os.path.join(os.path.expanduser('~'), '.sattmal')
+    else:
+        # Running in development
+        base_dir = os.getcwd()
+    
+    data_dir = os.path.join(base_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
+    return base_dir
+
+DATA_BASE_DIR = get_data_dir()
+CONFIG_FILE = os.path.join(DATA_BASE_DIR, "config.json")
+
+# If config doesn't exist in the data dir, try to copy it from the bundle/source
+if not os.path.exists(CONFIG_FILE):
+    base_path = getattr(sys, '_MEIPASS', os.getcwd())
+    src_config = os.path.join(base_path, "config.json")
+    # Also check for config.example.json as a fallback
+    src_example = os.path.join(base_path, "config.example.json")
+    
+    if os.path.exists(src_config):
+        shutil.copy(src_config, CONFIG_FILE)
+    elif os.path.exists(src_example):
+        shutil.copy(src_example, CONFIG_FILE)
+    else:
+        # Create a default empty config if source is missing too
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({
+                "use_openai": False,
+                "openai_api_key": "",
+                "ollama_base_url": "http://localhost:11434",
+                "fernet_key": Fernet.generate_key().decode()
+            }, f, indent=2)
 
 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
     config = json.load(f)
 
-USE_OPENAI = config.get("use_openai", True)
+USE_OPENAI = config.get("use_openai", False)
 OPENAI_API_KEY = config.get("openai_api_key")
 OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
 FERNET_KEY = config.get("fernet_key")
 if not FERNET_KEY:
-    raise RuntimeError("Fernet key missing from config!")
+    # If still missing, generate one
+    FERNET_KEY = Fernet.generate_key().decode()
+    config["fernet_key"] = FERNET_KEY
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
 
 # Generate a key once and store it securely (env var or config file)
 cipher = Fernet(FERNET_KEY)
 
-
-UPLOADS_DIR = os.path.join(os.getcwd(), "data", "uploads")
-SIGNATURES_DIR = os.path.join(os.getcwd(), "data", "signatures")
+UPLOADS_DIR = os.path.join(DATA_BASE_DIR, "data", "uploads")
+SIGNATURES_DIR = os.path.join(DATA_BASE_DIR, "data", "signatures")
 
 # Make sure directories exist
 os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -131,13 +179,21 @@ def save_metadata_for_doc_id(doc_id: str, updates: dict):
     return meta
 
 
-def analyze_pdfdoc(body: str) -> str:
+def analyze_document_content(body: str, language: str = "English", style: str = "layman") -> str:
+    lang_prompt = f"Provide the analysis in {language}."
+    style_prompt = ""
+    if style == "layman":
+        style_prompt = (
+            "Explain everything in simple, layman terms that someone without a legal background can understand. "
+            "Avoid complex legal jargon, and if you must use it, explain it clearly."
+        )
+    
     system_prompt = (
-        "You are an AI assistant. "
-        "Analyze the following PDF document content. "
-        "Summarize the key points, identify important information, "
-        "and highlight any notable sections or recommendations. "
-        "Provide the analysis in a clear and concise manner."
+        "You are an AI assistant specialized in analyzing legal documents, warranties, and agreements. "
+        f"Analyze the following document content. {lang_prompt} {style_prompt} "
+        "Summarize the key points, identify important obligations, "
+        "and highlight any potential risks or notable sections. "
+        "Format the output using clear markdown headers and bullet points."
     )
 
     if USE_OPENAI:
@@ -172,8 +228,41 @@ def analyze_pdfdoc(body: str) -> str:
 # Default route → dashboard
 @signature_bp.route("/")
 def index():
+    # Check if config is configured, if not, redirect to settings
+    if not config.get("openai_api_key") and config.get("use_openai"):
+        flash("Please configure your OpenAI API Key in settings.", "warning")
+        return redirect(url_for("signature.settings"))
+    
     docs = load_docs()
     return render_template("docdashboard.html", docs=docs)
+
+
+@signature_bp.route("/settings", methods=["GET", "POST"])
+def settings():
+    global config, USE_OPENAI, OPENAI_API_KEY, OLLAMA_BASE_URL
+    
+    if request.method == "POST":
+        use_openai = request.form.get("use_openai") == "on"
+        openai_key = request.form.get("openai_api_key", "").strip()
+        ollama_url = request.form.get("ollama_base_url", "http://localhost:11434").strip()
+        
+        config["use_openai"] = use_openai
+        config["openai_api_key"] = openai_key
+        config["ollama_base_url"] = ollama_url
+        
+        # Save to CONFIG_FILE
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+            
+        # Update current runtime variables
+        USE_OPENAI = use_openai
+        OPENAI_API_KEY = openai_key
+        OLLAMA_BASE_URL = ollama_url
+        
+        flash("Settings updated successfully.", "success")
+        return redirect(url_for("signature.index"))
+        
+    return render_template("settings.html", config=config)
 
 
 # View PDF
@@ -191,20 +280,23 @@ def docupload():
             file_path = os.path.join(UPLOADS_DIR, stored_filename)
             pdf_file.save(file_path)
 
+            extension = original_filename.split('.')[-1].lower() if '.' in original_filename else 'pdf'
+            
             meta = {
                 "id": file_id,
                 "original_filename": original_filename,
                 "stored_filename": stored_filename,
                 "filename": original_filename,
                 "file_path": file_path,
-                "type": "pdf",
+                "type": extension,
                 "status": "uploaded",
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "uploaded_at": datetime.utcnow().isoformat()
             }
             write_metadata(meta)
 
-            flash("PDF uploaded successfully.", "success")
-            return redirect(url_for("signature.docupload"))
+            flash(f"Document {original_filename} uploaded successfully.", "success")
+            return redirect(url_for("signature.index"))
 
         else:
             flash("Please provide a PDF file URL.", "danger")
@@ -218,7 +310,8 @@ def docupload():
 # Serve uploaded files
 @signature_bp.route('/docuploaded_file/<path:filename>')
 def docuploaded_file(filename):
-    uploads_dir = os.path.join(os.getcwd(), "data", "uploads")
+    # Use global UPLOADS_DIR
+    uploads_dir = UPLOADS_DIR
 
     # Loop through all .json meta files
     for f in os.listdir(uploads_dir):
@@ -356,29 +449,115 @@ def save_signed_pdf():
     return {"success": True, "filename": signed_filename}
 
 
-# Analyse document (AI stub)
-@signature_bp.route("/analyze_doc/<doc_id>")
+# Analyse document
+@signature_bp.route("/analyze_doc/<doc_id>", methods=["GET", "POST"])
 def analyze_doc(doc_id):
     meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
     if not os.path.exists(meta_path):
-        return {"success": False, "analysis": "Document metadata not found."}
+        flash("Document metadata not found.", "danger")
+        return redirect(url_for("signature.index"))
 
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get("file_path")
-    if not file_path or not os.path.exists(file_path):
-        return {"success": False, "analysis": "Document file not found."}
+    if request.method == "POST":
+        language = request.form.get("language", "English")
+        style = request.form.get("style", "layman")
+        
+        file_path = meta.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            flash("Document file not found.", "danger")
+            return redirect(url_for("signature.index"))
 
-    # Extract text from PDF (you can use PyPDF2 / pdfplumber)
-    import pdfplumber
-    text = ""
-    with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() + "\n"
+        text = ""
+        filename = file_path.lower()
+        
+        try:
+            if filename.endswith(".pdf"):
+                with pdfplumber.open(file_path) as pdf:
+                    for page in pdf.pages:
+                        extracted = page.extract_text()
+                        if extracted:
+                            text += extracted + "\n"
+            elif filename.endswith(".docx"):
+                doc = docx.Document(file_path)
+                for para in doc.paragraphs:
+                    text += para.text + "\n"
+            elif filename.endswith(".txt"):
+                with open(file_path, "r", encoding="utf-8") as f:
+                    text = f.read()
+            else:
+                flash("Unsupported file type for analysis.", "danger")
+                return redirect(url_for("signature.index"))
+        except Exception as e:
+            flash(f"Error extracting text: {e}", "danger")
+            return redirect(url_for("signature.index"))
 
-    analysis = analyze_pdfdoc(text)
-    return {"success": True, "analysis": analysis}
+        if not text.strip():
+            flash("No text content found in document to analyze.", "warning")
+            return redirect(url_for("signature.index"))
+
+        try:
+            raw_analysis = analyze_document_content(text, language=language, style=style)
+            # Convert analysis to HTML for better display
+            html_analysis = markdown.markdown(raw_analysis)
+            
+            # Store analysis in metadata
+            meta["analysis"] = html_analysis
+            meta["analysis_language"] = language
+            meta["analysis_style"] = style
+            write_metadata(meta)
+            
+            return render_template("docanalysis.html", doc=meta, analysis=html_analysis)
+        except Exception as e:
+            flash(f"Analysis failed: {e}", "danger")
+            return redirect(url_for("signature.index"))
+
+    analysis_html = meta.get("analysis")
+    
+    # Check if JSON is requested (more robust check)
+    is_json = request.is_json or \
+              'application/json' in request.headers.get('Accept', '') or \
+              request.args.get('format') == 'json'
+
+    if is_json:
+        if not analysis_html:
+            # Fallback to current settings if no analysis exists
+            try:
+                file_path = meta.get("file_path")
+                if not file_path or not os.path.exists(file_path):
+                     return jsonify({"success": False, "analysis": "Document file not found."})
+                
+                text = ""
+                # Quick text extract
+                filename = file_path.lower()
+                if filename.endswith(".pdf"):
+                    with pdfplumber.open(file_path) as pdf:
+                        for page in pdf.pages:
+                            extracted = page.extract_text()
+                            if extracted: text += extracted + "\n"
+                elif filename.endswith(".docx"):
+                    import docx
+                    doc = docx.Document(file_path)
+                    for para in doc.paragraphs:
+                        text += para.text + "\n"
+                elif filename.endswith(".txt"):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        text = f.read()
+
+                if not text.strip():
+                    return jsonify({"success": False, "analysis": "Low or no text content found to analyze."})
+
+                analysis_text = analyze_document_content(text)
+                return jsonify({"success": True, "analysis": analysis_text})
+            except Exception as e:
+                return jsonify({"success": False, "analysis": f"Extraction error: {str(e)}"})
+        
+        # Strip HTML for the simple modal if needed, or just return as is
+        return jsonify({"success": True, "analysis": analysis_html})
+
+    # GET -> show analysis options or current analysis if exists
+    return render_template("docanalysis.html", doc=meta, analysis=analysis_html)
 
 
 # Save drawn signature

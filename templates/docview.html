@@ -8,15 +8,16 @@
         <p><strong>Filename:</strong> {{ doc.filename }}</p>
         <p><strong>Type:</strong> {{ doc.type }}</p>
         <p><strong>Status:</strong> {{ doc.status }}</p>
-        <p><strong>Uploaded:</strong> {{ doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else '' }}</p>
+        <p><strong>Uploaded:</strong> {{ (doc.uploaded_at | todatetime).strftime('%Y-%m-%d %H:%M') if doc.uploaded_at
+            else '' }}</p>
     </div>
 
     {% if doc.type == 'pdf' and doc.view_url %}
-        <div style="height: 600px;">
-            <iframe src="{{ doc.view_url }}" width="100%" height="100%" style="border:none;"></iframe>
-        </div>
+    <div style="height: 600px;">
+        <iframe src="{{ doc.view_url }}" width="100%" height="100%" style="border:none;"></iframe>
+    </div>
     {% else %}
-        <p>Cannot display this document type.</p>
+    <p>Cannot display this document type.</p>
     {% endif %}
 
 

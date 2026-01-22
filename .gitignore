@@ -1,0 +1,7 @@
+.vscode/
+config.json
+data/signatures/*
+data/uploads/*
+data/
+dist/
+build/

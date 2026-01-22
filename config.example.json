@@ -1,9 +1,0 @@
-{
-    "email": "your.email@gmail.com",
-    "app_password": "your_gmail_app_password",
-    "use_openai": true,
-    "openai_api_key": "YOUR_OPENAI_API_KEY",
-    "ollama_base_url": "http://localhost:11434",
-    "delete_processed": false,
-    "fernet_key": "YOUR_GENERATED_KEY_HERE"
-}
