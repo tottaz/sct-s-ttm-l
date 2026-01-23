@@ -123,7 +123,11 @@
 
           <div class="d-grid gap-2">
             <button id="saveDocument" class="btn btn-success">Save Signed PDF</button>
-            <button id="analyzeDocument" class="btn btn-info text-white">Quick Analysis</button>
+            <button id="analyzeDocument" class="btn btn-info text-white">
+              <span id="analyzeSpinnerBtn" class="spinner-border spinner-border-sm d-none" role="status"
+                aria-hidden="true"></span>
+              <span id="analyzeText">Quick Analysis</span>
+            </button>
           </div>
         </div>
       </div>
@@ -702,18 +706,27 @@
 
     // ---------- Analysis Modal ----------
     document.getElementById("analyzeDocument").addEventListener("click", async () => {
-      analysisModal.show();
+      const btn = document.getElementById("analyzeDocument");
+      const btnSpinner = document.getElementById("analyzeSpinnerBtn");
+      const btnText = document.getElementById("analyzeText");
       const resultDiv = document.getElementById("analysisResult");
       const spinner = document.getElementById("analysisSpinner");
+
+      // Show modal immediately
+      analysisModal.show();
       spinner.style.display = "block";
       resultDiv.innerHTML = spinner.outerHTML;
+
+      // Disable button and show spinner
+      btn.disabled = true;
+      btnSpinner.classList.remove("d-none");
+      btnText.textContent = " Analysing...";
 
       try {
         const resp = await fetch("{{ url_for('signature.analyze_doc', doc_id=document.id) }}", {
           headers: { 'Accept': 'application/json' }
         });
         const data = await resp.json();
-        spinner.style.display = "none";
 
         if (data.success) {
           resultDiv.innerHTML = `<div class="analysis-text">${data.analysis}</div>`;
@@ -722,6 +735,12 @@
         }
       } catch (err) {
         resultDiv.innerHTML = `<p class="text-danger">Failed to connect to analysis service.</p>`;
+      } finally {
+        // Re-enable button and hide spinner
+        btn.disabled = false;
+        btnSpinner.classList.add("d-none");
+        btnText.textContent = "Quick Analysis";
+        spinner.style.display = "none";
       }
     });
   });

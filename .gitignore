@@ -5,3 +5,5 @@ data/uploads/*
 data/
 dist/
 build/
+.venv/
+__pycache__

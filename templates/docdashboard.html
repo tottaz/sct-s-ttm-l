@@ -39,8 +39,12 @@
                     <div class="btn-group">
                         <a href="{{ url_for('signature.docview', doc_id=doc.id) }}" class="btn btn-sm btn-info"
                             title="View">View</a>
-                        <a href="{{ url_for('signature.analyze_doc', doc_id=doc.id) }}" class="btn btn-sm btn-warning"
-                            title="Analyse">Analyse</a>
+                        <a href="{{ url_for('signature.analyze_doc', doc_id=doc.id) }}"
+                            class="btn btn-sm btn-warning analyze-link" title="Analyse">
+                            <span class="spinner-border spinner-border-sm d-none" role="status"
+                                aria-hidden="true"></span>
+                            <span class="btn-text">Analyse</span>
+                        </a>
                         {% if doc.type == 'pdf' %}
                         <a href="{{ url_for('signature.docsign', doc_id=doc.id) }}" class="btn btn-sm btn-primary"
                             title="Sign">Sign</a>
@@ -62,4 +66,25 @@
         </tbody>
     </table>
 </div>
+{% endblock %}
+
+{% block script %}
+{{ super() }}
+<script>
+    document.querySelectorAll('.analyze-link').forEach(link => {
+        link.addEventListener('click', function (e) {
+            if (this.classList.contains('disabled')) {
+                e.preventDefault();
+                return;
+            }
+
+            const spinner = this.querySelector('.spinner-border');
+            const text = this.querySelector('.btn-text');
+
+            this.classList.add('disabled');
+            spinner.classList.remove('d-none');
+            text.textContent = ' Analysing...';
+        });
+    });
+</script>
 {% endblock %}

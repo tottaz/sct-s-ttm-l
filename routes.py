@@ -80,14 +80,24 @@ USE_OPENAI = config.get("use_openai", False)
 OPENAI_API_KEY = config.get("openai_api_key")
 OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
 FERNET_KEY = config.get("fernet_key")
-if not FERNET_KEY:
-    # If still missing, generate one
+
+def is_valid_fernet_key(key):
+    if not key or not isinstance(key, str):
+        return False
+    try:
+        Fernet(key)
+        return True
+    except Exception:
+        return False
+
+if not is_valid_fernet_key(FERNET_KEY):
+    # If missing or invalid (e.g. placeholder), generate a new one
     FERNET_KEY = Fernet.generate_key().decode()
     config["fernet_key"] = FERNET_KEY
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
-# Generate a key once and store it securely (env var or config file)
+# Initialize cipher
 cipher = Fernet(FERNET_KEY)
 
 UPLOADS_DIR = os.path.join(DATA_BASE_DIR, "data", "uploads")
@@ -548,8 +558,9 @@ def analyze_doc(doc_id):
                 if not text.strip():
                     return jsonify({"success": False, "analysis": "Low or no text content found to analyze."})
 
-                analysis_text = analyze_document_content(text)
-                return jsonify({"success": True, "analysis": analysis_text})
+                analysis_text_raw = analyze_document_content(text)
+                analysis_html = markdown.markdown(analysis_text_raw)
+                return jsonify({"success": True, "analysis": analysis_html})
             except Exception as e:
                 return jsonify({"success": False, "analysis": f"Extraction error: {str(e)}"})
         

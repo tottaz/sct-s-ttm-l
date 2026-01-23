@@ -17,32 +17,40 @@
                     <p><strong>Filename:</strong> {{ doc.filename }}</p>
                     <p><strong>Type:</strong> {{ doc.type | upper }}</p>
                     <p><strong>Status:</strong> <span class="badge bg-info text-dark">{{ doc.status }}</span></p>
-                    <p><strong>Uploaded:</strong> {{ (doc.uploaded_at | todatetime).strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else 'N/A' }}</p>
+                    <p><strong>Uploaded:</strong> {{ (doc.uploaded_at | todatetime).strftime('%Y-%m-%d %H:%M') if
+                        doc.uploaded_at else 'N/A' }}</p>
                 </div>
             </div>
 
             <div class="card">
                 <div class="card-header bg-primary text-white">
-                    Analyse Again
+                    AI Analysis
                 </div>
                 <div class="card-body">
-                    <form action="{{ url_for('signature.analyze_doc', doc_id=doc.id) }}" method="POST">
+                    <form id="analyze-form" action="{{ url_for('signature.analyze_doc', doc_id=doc.id) }}"
+                        method="POST">
                         <div class="mb-3">
                             <label for="language" class="form-label">Language</label>
                             <select class="form-select" id="language" name="language">
-                                <option value="English" {% if doc.analysis_language == 'English' %}selected{% endif %}>English</option>
-                                <option value="Swedish" {% if doc.analysis_language == 'Swedish' %}selected{% endif %}>Swedish</option>
+                                <option value="English" {% if doc.analysis_language=='English' %}selected{% endif %}>
+                                    English</option>
+                                <option value="Swedish" {% if doc.analysis_language=='Swedish' %}selected{% endif %}>
+                                    Swedish</option>
                             </select>
                         </div>
                         <div class="mb-3">
                             <label for="style" class="form-label">Style</label>
                             <select class="form-select" id="style" name="style">
-                                <option value="layman" {% if doc.analysis_style == 'layman' %}selected{% endif %}>Layman Terms</option>
-                                <option value="professional" {% if doc.analysis_style == 'professional' %}selected{% endif %}>Professional</option>
+                                <option value="layman" {% if doc.analysis_style=='layman' %}selected{% endif %}>Layman
+                                    Terms</option>
+                                <option value="professional" {% if doc.analysis_style=='professional' %}selected{% endif
+                                    %}>Professional</option>
                             </select>
                         </div>
-                        <button type="submit" class="btn btn-primary w-100">
-                            {% if analysis %}Re-analyse{% else %}Analyse{% endif %}
+                        <button type="submit" id="analyze-btn" class="btn btn-primary w-100">
+                            <span id="btn-spinner" class="spinner-border spinner-border-sm d-none" role="status"
+                                aria-hidden="true"></span>
+                            <span id="btn-text">{% if analysis %}Re-analyse{% else %}Analyse{% endif %}</span>
                         </button>
                     </form>
                 </div>
@@ -56,22 +64,23 @@
                 </div>
                 <div class="card-body" id="analysis-content">
                     {% if analysis %}
-                        <div class="analysis-result">
-                            {{ analysis | safe }}
-                        </div>
+                    <div class="analysis-result">
+                        {{ analysis | safe }}
+                    </div>
                     {% elif doc.analysis %}
-                         <div class="analysis-result">
-                            {{ doc.analysis | safe }}
-                        </div>
+                    <div class="analysis-result">
+                        {{ doc.analysis | safe }}
+                    </div>
                     {% else %}
-                        <div class="text-center py-5">
-                            <p class="text-muted">No analysis generated yet. Use the sidebar to start the analysis.</p>
-                        </div>
+                    <div class="text-center py-5">
+                        <p class="text-muted">No analysis generated yet. Use the sidebar to start the analysis.</p>
+                    </div>
                     {% endif %}
                 </div>
                 {% if analysis or doc.analysis %}
                 <div class="card-footer bg-light d-flex justify-content-end">
-                    <button class="btn btn-sm btn-outline-primary me-2" onclick="copyAnalysis()">Copy to Clipboard</button>
+                    <button class="btn btn-sm btn-outline-primary me-2" onclick="copyAnalysis()">Copy to
+                        Clipboard</button>
                 </div>
                 {% endif %}
             </div>
@@ -83,24 +92,39 @@
 {% block script %}
 {{ super() }}
 <script>
-function copyAnalysis() {
-    const content = document.querySelector('.analysis-result').innerText;
-    navigator.clipboard.writeText(content).then(() => {
-        alert('Analysis copied to clipboard!');
+    function copyAnalysis() {
+        const content = document.querySelector('.analysis-result').innerText;
+        navigator.clipboard.writeText(content).then(() => {
+            alert('Analysis copied to clipboard!');
+        });
+    }
+
+    document.getElementById('analyze-form').addEventListener('submit', function () {
+        const btn = document.getElementById('analyze-btn');
+        const spinner = document.getElementById('btn-spinner');
+        const text = document.getElementById('btn-text');
+
+        btn.disabled = true;
+        spinner.classList.remove('d-none');
+        text.textContent = ' Analysing...';
     });
-}
 </script>
 <style>
-.analysis-result h1, .analysis-result h2, .analysis-result h3 {
-    margin-top: 1.5rem;
-    margin-bottom: 1rem;
-    font-weight: 600;
-}
-.analysis-result ul, .analysis-result ol {
-    margin-bottom: 1rem;
-}
-.analysis-result li {
-    margin-bottom: 0.5rem;
-}
+    .analysis-result h1,
+    .analysis-result h2,
+    .analysis-result h3 {
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        font-weight: 600;
+    }
+
+    .analysis-result ul,
+    .analysis-result ol {
+        margin-bottom: 1rem;
+    }
+
+    .analysis-result li {
+        margin-bottom: 0.5rem;
+    }
 </style>
 {% endblock %}

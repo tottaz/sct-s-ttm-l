@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sct.sattmal</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/tottazetterlund/Dev/sct-sattmal/.venv/bin/python</string>
+        <string>/Users/tottazetterlund/Dev/sct-sattmal/app.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>/Users/tottazetterlund/Dev/sct-sattmal</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/sct-sattmal.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/sct-sattmal.err</string>
+</dict>
+</plist>
