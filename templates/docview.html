@@ -21,6 +21,106 @@
     {% endif %}
 
 
-    <a href="{{ url_for('signature.index') }}" class="btn btn-secondary mt-3">Back to Dashboard</a>
+    <div class="mt-3">
+        <a href="{{ url_for('signature.index') }}" class="btn btn-secondary">Back to Dashboard</a>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#emailModal">
+            Send Email
+        </button>
+    </div>
 </div>
+
+<!-- Email Modal -->
+<div class="modal fade" id="emailModal" tabindex="-1" aria-labelledby="emailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title" id="emailModalLabel">Send Document via Email</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"
+                    aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="emailForm">
+                    <div class="mb-3">
+                        <label for="to" class="form-label">To <span class="text-danger">*</span></label>
+                        <input type="email" class="form-control" id="to" name="to" required
+                            placeholder="recipient@example.com">
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="cc" class="form-label">Cc</label>
+                            <input type="email" class="form-control" id="cc" name="cc" placeholder="cc@example.com">
+                        </div>
+                        <div class="col-md-6">
+                            <label for="bcc" class="form-label">Bcc</label>
+                            <input type="email" class="form-control" id="bcc" name="bcc" placeholder="bcc@example.com">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="message" class="form-label">Message</label>
+                        <textarea class="form-control" id="message" name="message" rows="5"
+                            placeholder="Write your message here...">Hello, please find the attached document.</textarea>
+                    </div>
+                    <div class="alert alert-info py-2">
+                        <small>The document <strong>{{ doc.filename }}</strong> will be attached.</small>
+                    </div>
+                    <div id="emailStatus" class="mt-3"></div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btnSendEmail">
+                    <span id="sendSpinner" class="spinner-border spinner-border-sm d-none" role="status"
+                        aria-hidden="true"></span>
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('btnSendEmail').addEventListener('click', function () {
+        const form = document.getElementById('emailForm');
+        if (!form.checkValidity()) {
+            form.reportValidity();
+            return;
+        }
+
+        const formData = new FormData(form);
+        const btn = this;
+        const spinner = document.getElementById('sendSpinner');
+        const statusDiv = document.getElementById('emailStatus');
+
+        btn.disabled = true;
+        spinner.classList.remove('d-none');
+        statusDiv.innerHTML = '';
+
+        fetch("{{ url_for('signature.doc_send', doc_id=doc.id) }}", {
+            method: 'POST',
+            body: formData
+        })
+            .then(response => response.json())
+            .then(data => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+
+                if (data.success) {
+                    statusDiv.innerHTML = `<div class="alert alert-success">${data.message}</div>`;
+                    setTimeout(() => {
+                        const modal = bootstrap.Modal.getInstance(document.getElementById('emailModal'));
+                        modal.hide();
+                        form.reset();
+                        statusDiv.innerHTML = '';
+                    }, 2000);
+                } else {
+                    statusDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                }
+            })
+            .catch(error => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                statusDiv.innerHTML = `<div class="alert alert-danger">An error occurred: ${error}</div>`;
+            });
+    });
+</script>
 {% endblock %}

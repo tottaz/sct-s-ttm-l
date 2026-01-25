@@ -1,92 +1,109 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <title>Upload, Sign, and Send</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 2rem; }
-        canvas { border: 1px solid #ccc; }
-        .preview-area, .signature-area { margin-top: 2rem; }
-        button { padding: 10px 20px; margin-top: 1rem; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 2rem;
+        }
+
+        canvas {
+            border: 1px solid #ccc;
+        }
+
+        .preview-area,
+        .signature-area {
+            margin-top: 2rem;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin-top: 1rem;
+        }
     </style>
 </head>
+
 <body>
 
-<h2>Upload, Sign, and Send Documents</h2>
-<p><strong>100% free. Legally compliant with ESIGN Act & UETA.</strong></p>
+    <h2>Upload, Sign, and Send Documents</h2>
+    <p><strong>100% free. Legally compliant with ESIGN Act & UETA.</strong></p>
 
-<!-- Upload -->
-<input type="file" id="fileInput" accept="application/pdf"><br>
+    <!-- Upload -->
+    <input type="file" id="fileInput" accept="application/pdf"><br>
 
-<!-- PDF Preview (requires PDF.js) -->
-<div class="preview-area">
-    <canvas id="pdf-canvas" width="600" height="800"></canvas>
-</div>
+    <!-- PDF Preview (requires PDF.js) -->
+    <div class="preview-area">
+        <canvas id="pdf-canvas" width="600" height="800"></canvas>
+    </div>
 
-<!-- Signature -->
-<div class="signature-area">
-    <p>Draw your signature below:</p>
-    <canvas id="signature-pad" width="300" height="150"></canvas><br>
-    <button onclick="clearSig()">Clear Signature</button>
-</div>
+    <!-- Signature -->
+    <div class="signature-area">
+        <p>Draw your signature below:</p>
+        <canvas id="signature-pad" width="300" height="150"></canvas><br>
+        <button onclick="clearSig()">Clear Signature</button>
+    </div>
 
-<!-- Submit -->
-<form id="uploadForm" method="POST" action="/api/sign" enctype="multipart/form-data">
-    <input type="hidden" name="signature" id="signatureData">
-    <input type="file" id="hiddenPdf" name="document" style="display:none">
-    <button type="button" onclick="submitSigned()">Sign and Send</button>
-</form>
+    <!-- Submit -->
+    <form id="uploadForm" method="POST" action="/api/sign" enctype="multipart/form-data">
+        <input type="hidden" name="signature" id="signatureData">
+        <input type="file" id="hiddenPdf" name="document" style="display:none">
+        <button type="button" onclick="submitSigned()">Sign and Send</button>
+    </form>
 
-<!-- PDF.js -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <!-- PDF.js -->
+    <script src="{{ url_for('static', filename='js/pdf.min.js') }}"></script>
 
-<!-- Signature Pad -->
-<script src="https://cdn.jsdelivr.net/npm/signature_pad@4.1.5/dist/signature_pad.umd.min.js"></script>
+    <!-- Signature Pad -->
+    <script src="{{ url_for('static', filename='js/signature_pad.umd.min.js') }}"></script>
 
-<script>
-    const fileInput = document.getElementById('fileInput');
-    const hiddenPdf = document.getElementById('hiddenPdf');
-    const pdfCanvas = document.getElementById('pdf-canvas');
-    const ctx = pdfCanvas.getContext('2d');
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const hiddenPdf = document.getElementById('hiddenPdf');
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const ctx = pdfCanvas.getContext('2d');
 
-    const signaturePad = new SignaturePad(document.getElementById('signature-pad'));
+        const signaturePad = new SignaturePad(document.getElementById('signature-pad'));
 
-    fileInput.addEventListener('change', async function (e) {
-        const file = e.target.files[0];
-        if (file && file.type === "application/pdf") {
-            const reader = new FileReader();
-            reader.onload = async function () {
-                const pdfData = new Uint8Array(this.result);
-                const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-                const page = await pdf.getPage(1);
-                const viewport = page.getViewport({ scale: 1.2 });
-                pdfCanvas.width = viewport.width;
-                pdfCanvas.height = viewport.height;
-                await page.render({ canvasContext: ctx, viewport }).promise;
-            };
-            reader.readAsArrayBuffer(file);
+        fileInput.addEventListener('change', async function (e) {
+            const file = e.target.files[0];
+            if (file && file.type === "application/pdf") {
+                const reader = new FileReader();
+                reader.onload = async function () {
+                    const pdfData = new Uint8Array(this.result);
+                    const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+                    const page = await pdf.getPage(1);
+                    const viewport = page.getViewport({ scale: 1.2 });
+                    pdfCanvas.width = viewport.width;
+                    pdfCanvas.height = viewport.height;
+                    await page.render({ canvasContext: ctx, viewport }).promise;
+                };
+                reader.readAsArrayBuffer(file);
 
-            // also clone the file for form upload
-            const dataTransfer = new DataTransfer();
-            dataTransfer.items.add(file);
-            hiddenPdf.files = dataTransfer.files;
+                // also clone the file for form upload
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(file);
+                hiddenPdf.files = dataTransfer.files;
+            }
+        });
+
+        function clearSig() {
+            signaturePad.clear();
         }
-    });
 
-    function clearSig() {
-        signaturePad.clear();
-    }
-
-    function submitSigned() {
-        if (signaturePad.isEmpty()) {
-            alert("Please provide a signature.");
-            return;
+        function submitSigned() {
+            if (signaturePad.isEmpty()) {
+                alert("Please provide a signature.");
+                return;
+            }
+            const sigData = signaturePad.toDataURL();
+            document.getElementById('signatureData').value = sigData;
+            document.getElementById('uploadForm').submit();
         }
-        const sigData = signaturePad.toDataURL();
-        document.getElementById('signatureData').value = sigData;
-        document.getElementById('uploadForm').submit();
-    }
-</script>
+    </script>
 
 </body>
+
 </html>

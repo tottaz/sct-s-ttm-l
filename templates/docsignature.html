@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 
 {% block head %}
-<link
-  href="https://fonts.googleapis.com/css2?family=Alex+Brush&family=Dancing+Script&family=Great+Vibes&family=Sacramento&display=swap"
-  rel="stylesheet">
+<link href="{{ url_for('static', filename='css/fonts.css') }}" rel="stylesheet">
 {% endblock %}
 
 {% block content %}
@@ -251,15 +249,15 @@
 {% endblock %}
 
 {% block script %}
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/signature_pad@4.0.0/dist/signature_pad.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pdf-lib/dist/pdf-lib.min.js"></script>
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pdf.2.6.347.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/signature_pad.4.0.0.umd.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pdf-lib.min.js') }}"></script>
 
 <script>
   document.addEventListener("DOMContentLoaded", function () {
     // ---------- PDF.js ----------
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.6.347/build/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "{{ url_for('static', filename='js/pdf.worker.2.6.347.min.js') }}";
     const pdfUrl = "{{ url_for('signature.docuploaded_file', filename=document.filename) }}";
     const pdfCanvas = document.getElementById("pdfCanvas");
     const pdfCtx = pdfCanvas.getContext("2d");

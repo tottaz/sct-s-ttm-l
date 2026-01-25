@@ -17,6 +17,10 @@ import uuid
 import base64
 import json
 import shutil
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
@@ -255,10 +259,14 @@ def settings():
         use_openai = request.form.get("use_openai") == "on"
         openai_key = request.form.get("openai_api_key", "").strip()
         ollama_url = request.form.get("ollama_base_url", "http://localhost:11434").strip()
+        email = request.form.get("email", "").strip()
+        app_password = request.form.get("app_password", "").strip()
         
         config["use_openai"] = use_openai
         config["openai_api_key"] = openai_key
         config["ollama_base_url"] = ollama_url
+        config["email"] = email
+        config["app_password"] = app_password
         
         # Save to CONFIG_FILE
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -273,6 +281,81 @@ def settings():
         return redirect(url_for("signature.index"))
         
     return render_template("settings.html", config=config)
+
+@signature_bp.route("/doc/send/<doc_id>", methods=["POST"])
+def doc_send(doc_id):
+    to_email = request.form.get("to")
+    cc_email = request.form.get("cc")
+    bcc_email = request.form.get("bcc")
+    message_text = request.form.get("message")
+
+    if not to_email:
+        return jsonify({"error": "Recipient email is required"}), 400
+
+    # Load metadata to find the file
+    docs = load_docs()
+    doc = next((d for d in docs if d['id'] == doc_id), None)
+    if not doc:
+        return jsonify({"error": "Document not found"}), 404
+
+    # Determine file path
+    file_path = doc.get('file_path')
+    if not file_path or not os.path.exists(file_path):
+        # Fallback to stored_filename if file_path is missing or incorrect
+        stored_filename = doc.get('stored_filename')
+        if stored_filename:
+            file_path = os.path.join(UPLOADS_DIR, stored_filename)
+        else:
+            # Last resort fallback
+            file_path = os.path.join(UPLOADS_DIR, doc.get('filename'))
+
+    attachment_name = doc.get('filename', 'document.pdf')
+
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"error": f"File not found on disk: {file_path}"}), 404
+
+    # Get email credentials
+    sender_email = config.get("email")
+    app_password = config.get("app_password")
+    if app_password:
+        app_password = app_password.replace(" ", "").strip()
+
+    if not sender_email or not app_password:
+        return jsonify({"error": "Email credentials not configured in settings"}), 400
+
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to_email
+        if cc_email:
+            msg['Cc'] = cc_email
+        msg['Subject'] = f"Document: {attachment_name}"
+
+        msg.attach(MIMEText(message_text, 'plain'))
+
+        # Attach file
+        with open(file_path, "rb") as f:
+            part = MIMEApplication(f.read(), Name=attachment_name)
+            part['Content-Disposition'] = f'attachment; filename="{attachment_name}"'
+            msg.attach(part)
+
+        # Send email
+        recipients = [to_email]
+        if cc_email:
+            recipients.append(cc_email)
+        if bcc_email:
+            recipients.append(bcc_email)
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender_email, app_password)
+            server.sendmail(sender_email, recipients, msg.as_string())
+
+        return jsonify({"success": True, "message": "Email sent successfully!"})
+
+    except Exception as e:
+        return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
 
 # View PDF
@@ -411,7 +494,14 @@ def download_doc(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get("file_path")
+    file_path = meta.get('file_path')
+    if not file_path or not os.path.exists(file_path):
+        stored_filename = meta.get('stored_filename')
+        if stored_filename:
+            file_path = os.path.join(UPLOADS_DIR, stored_filename)
+        else:
+            file_path = os.path.join(UPLOADS_DIR, meta.get('filename'))
+
     if not file_path or not os.path.exists(file_path):
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))
@@ -642,7 +732,14 @@ def serve_doc(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get("file_path")
+    file_path = meta.get('file_path')
+    if not file_path or not os.path.exists(file_path):
+        stored_filename = meta.get('stored_filename')
+        if stored_filename:
+            file_path = os.path.join(UPLOADS_DIR, stored_filename)
+        else:
+            file_path = os.path.join(UPLOADS_DIR, meta.get('filename'))
+
     if not file_path or not os.path.exists(file_path):
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))

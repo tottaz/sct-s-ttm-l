@@ -19,8 +19,13 @@
 
                     <div id="openai_settings" class="mb-4">
                         <label for="openai_api_key" class="form-label fw-bold">OpenAI API Key</label>
-                        <input type="password" class="form-control" id="openai_api_key" name="openai_api_key"
-                            value="{{ config.openai_api_key }}" placeholder="sk-...">
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="openai_api_key" name="openai_api_key"
+                                value="{{ config.openai_api_key }}" placeholder="sk-...">
+                            <button class="btn btn-outline-secondary" type="button" id="toggle_openai_key">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="mb-4">
@@ -28,6 +33,28 @@
                         <input type="text" class="form-control" id="ollama_base_url" name="ollama_base_url"
                             value="{{ config.ollama_base_url }}" placeholder="http://localhost:11434">
                         <div class="form-text">The address where your local Ollama server is running.</div>
+                    </div>
+
+                    <hr class="my-4">
+                    <h6 class="mb-3 text-primary">Mail Settings (Gmail)</h6>
+
+                    <div class="mb-3">
+                        <label for="email" class="form-label fw-bold">Gmail Address</label>
+                        <input type="email" class="form-control" id="email" name="email" value="{{ config.email }}"
+                            placeholder="your.email@gmail.com">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="app_password" class="form-label fw-bold">App Password</label>
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="app_password" name="app_password"
+                                value="{{ config.app_password }}" placeholder="your_gmail_app_password">
+                            <button class="btn btn-outline-secondary" type="button" id="toggle_app_password">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
+                        <div class="form-text">Generate an App Password in your Google Account settings if 2FA is
+                            enabled.</div>
                     </div>
 
                     <div class="d-grid gap-2">
@@ -47,6 +74,25 @@
     function toggleOpenAiSettings() {
         openaiSettings.style.display = useOpenAiSwitch.checked ? 'block' : 'none';
     }
+
+    function setupPasswordToggle(inputId, buttonId) {
+        const input = document.getElementById(inputId);
+        const button = document.getElementById(buttonId);
+        const icon = button.querySelector('i');
+
+        button.addEventListener('click', () => {
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.classList.replace('bi-eye', 'bi-eye-slash');
+            } else {
+                input.type = 'password';
+                icon.classList.replace('bi-eye-slash', 'bi-eye');
+            }
+        });
+    }
+
+    setupPasswordToggle('openai_api_key', 'toggle_openai_key');
+    setupPasswordToggle('app_password', 'toggle_app_password');
 
     useOpenAiSwitch.addEventListener('change', toggleOpenAiSettings);
     toggleOpenAiSettings(); // Initial state

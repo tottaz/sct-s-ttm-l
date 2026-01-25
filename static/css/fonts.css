@@ -1,0 +1,24 @@
+@font-face {
+  font-family: 'Alex Brush';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../fonts/alexbrush.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Dancing Script';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../fonts/dancingscript.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Great Vibes';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../fonts/greatvibes.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Sacramento';
+  font-style: normal;
+  font-weight: 400;
+  src: url('../fonts/sacramento.woff2') format('woff2');
+}
