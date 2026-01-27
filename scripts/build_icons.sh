@@ -3,7 +3,7 @@
 # Exit on error
 set -e
 
-echo "🎨 Generating macOS icons..."
+echo "Generating macOS icons..."
 
 # Directory containing the .iconset
 ICONSET_DIR="assets/icon.iconset"
@@ -38,4 +38,4 @@ done
 # Convert iconset to icns
 iconutil -c icns "$ICONSET_DIR" -o assets/icon.icns
 
-echo "✅ icon.icns created in assets/"
+echo "icon.icns created in assets/"

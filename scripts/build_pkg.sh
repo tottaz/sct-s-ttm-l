@@ -7,7 +7,7 @@ IDENTIFIER="com.sct.sattmal"
 VERSION="1.0.0"
 INSTALL_LOCATION="/Applications"
 
-echo "📦 Building .pkg installer for $APP_NAME..."
+echo "Building .pkg installer for $APP_NAME..."
 
 # Build the package
 pkgbuild --component "dist/$APP_NAME.app" \
@@ -16,4 +16,4 @@ pkgbuild --component "dist/$APP_NAME.app" \
          --install-location "$INSTALL_LOCATION" \
          "dist/$PKG_NAME"
 
-echo "✅ $PKG_NAME created in dist/"
+echo "$PKG_NAME created in dist/"
