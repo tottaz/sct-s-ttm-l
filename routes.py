@@ -239,6 +239,141 @@ def analyze_document_content(body: str, language: str = "English", style: str = 
             raise Exception(f"Ollama chat error: {e}")
 
 
+def extract_text_from_image(image_path: str) -> str:
+    """Extract text from an image using Ollama with llava model."""
+    if USE_OPENAI:
+         # simple fallback or placeholder if user only has OpenAI key but not Ollama
+         # For now, let's assume if they upload image they want local generic vision or we can use gpt-4o-mini vision if available
+         # But the requirement was specific to Ollama. Let's stick to Ollama for image text extraction for now as requested.
+         pass
+
+    # check if ollama is running
+    try:
+        ollama.list()
+    except Exception:
+        raise Exception("Ollama server is not running. Start it with: ollama serve")
+
+    try:
+        # We need to provide the image content to llava
+        with open(image_path, 'rb') as f:
+            image_bytes = f.read()
+            
+        response = ollama.chat(
+            model="llava:latest", 
+            messages=[
+                {
+                    'role': 'user',
+                    'content': 'Extract all text from this image. Output only the text, no conversational filler.',
+                    'images': [image_bytes]
+                }
+            ]
+        )
+        return response['message']['content'].strip()
+    except Exception as e:
+        # Fallback to just saying it's an image if llava fails or model not found
+        print(f"Llava extraction failed: {e}")
+        return ""
+
+def get_document_text(file_path: str) -> str:
+    """Helper to extract text from various file formats."""
+    text = ""
+    filename = file_path.lower()
+    
+    if filename.endswith(".pdf"):
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+    elif filename.endswith(".docx"):
+        doc = docx.Document(file_path)
+        for para in doc.paragraphs:
+            text += para.text + "\n"
+    elif filename.endswith(".txt"):
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    elif filename.endswith((".png", ".jpg", ".jpeg")):
+        text = extract_text_from_image(file_path)
+    else:
+        raise ValueError("Unsupported file type.")
+    
+    return text
+
+
+def translate_document_content(text: str, target_language: str = "English") -> str:
+    system_prompt = (
+        f"You are a professional translator. Translate the following text into {target_language}. "
+        "Maintain the original tone and formatting as much as possible. "
+        "Return only the translated text."
+    )
+
+    if USE_OPENAI:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ]
+        )
+        return response.choices[0].message.content.strip()
+    else:
+        # Ollama
+        try:
+            ollama.list()
+        except Exception:
+            raise Exception("Ollama server is not running. Start it with: ollama serve")
+        try:
+            response = ollama.chat(
+                model="llama3.2:latest",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text}
+                ]
+            )
+            return response["message"]["content"].strip()
+        except Exception as e:
+            raise Exception(f"Ollama chat error: {e}")
+
+
+def generate_response_content(text: str, instructions: str = "", tone: str = "Professional") -> str:
+    system_prompt = (
+        f"You are an AI assistant helping to draft a response to a document. "
+        f"The user has provided the following document content. "
+        f"Draft a response in a {tone} tone. "
+    )
+    
+    if instructions:
+        system_prompt += f" Additional instructions from the user: {instructions}"
+
+    if USE_OPENAI:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ]
+        )
+        return response.choices[0].message.content.strip()
+    else:
+        # Ollama
+        try:
+            ollama.list()
+        except Exception:
+            raise Exception("Ollama server is not running. Start it with: ollama serve")
+        try:
+            response = ollama.chat(
+                model="llama3.2:latest",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": text}
+                ]
+            )
+            return response["message"]["content"].strip()
+        except Exception as e:
+            raise Exception(f"Ollama chat error: {e}")
+
 # Default route → dashboard
 @signature_bp.route("/")
 def index():
@@ -375,6 +510,12 @@ def docupload():
 
             extension = original_filename.split('.')[-1].lower() if '.' in original_filename else 'pdf'
             
+            # Allow images
+            allowed_extensions = {'pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg'}
+            if extension not in allowed_extensions:
+                 flash(f"Unsupported file type: {extension}", "danger")
+                 return redirect(url_for("signature.docupload"))
+
             meta = {
                 "id": file_id,
                 "original_filename": original_filename,
@@ -573,22 +714,7 @@ def analyze_doc(doc_id):
         filename = file_path.lower()
         
         try:
-            if filename.endswith(".pdf"):
-                with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages:
-                        extracted = page.extract_text()
-                        if extracted:
-                            text += extracted + "\n"
-            elif filename.endswith(".docx"):
-                doc = docx.Document(file_path)
-                for para in doc.paragraphs:
-                    text += para.text + "\n"
-            elif filename.endswith(".txt"):
-                with open(file_path, "r", encoding="utf-8") as f:
-                    text = f.read()
-            else:
-                flash("Unsupported file type for analysis.", "danger")
-                return redirect(url_for("signature.index"))
+            text = get_document_text(file_path)
         except Exception as e:
             flash(f"Error extracting text: {e}", "danger")
             return redirect(url_for("signature.index"))
@@ -628,23 +754,7 @@ def analyze_doc(doc_id):
                 if not file_path or not os.path.exists(file_path):
                      return jsonify({"success": False, "analysis": "Document file not found."})
                 
-                text = ""
-                # Quick text extract
-                filename = file_path.lower()
-                if filename.endswith(".pdf"):
-                    with pdfplumber.open(file_path) as pdf:
-                        for page in pdf.pages:
-                            extracted = page.extract_text()
-                            if extracted: text += extracted + "\n"
-                elif filename.endswith(".docx"):
-                    import docx
-                    doc = docx.Document(file_path)
-                    for para in doc.paragraphs:
-                        text += para.text + "\n"
-                elif filename.endswith(".txt"):
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        text = f.read()
-
+                text = get_document_text(file_path)
                 if not text.strip():
                     return jsonify({"success": False, "analysis": "Low or no text content found to analyze."})
 
@@ -660,6 +770,92 @@ def analyze_doc(doc_id):
     # GET -> show analysis options or current analysis if exists
     return render_template("docanalysis.html", doc=meta, analysis=analysis_html)
 
+
+@signature_bp.route("/translate_doc/<doc_id>", methods=["POST"])
+def translate_doc(doc_id):
+    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    if not os.path.exists(meta_path):
+        return jsonify({"success": False, "error": "Document metadata not found."}), 404
+
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    target_language = request.json.get("language", "English")
+    
+    file_path = meta.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"success": False, "error": "Document file not found."}), 404
+
+    text = ""
+    filename = file_path.lower()
+    
+
+    
+    try:
+        text = get_document_text(file_path)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error extracting text: {e}"}), 500
+
+    if not text.strip():
+        return jsonify({"success": False, "error": "No text content found to translate."}), 400
+
+    try:
+        translation = translate_document_content(text, target_language=target_language)
+        # Convert to HTML
+        translation_html = markdown.markdown(translation)
+        
+        # Save to metadata
+        meta["translation"] = translation_html
+        meta["translation_language"] = target_language
+        write_metadata(meta)
+        
+        return jsonify({"success": True, "translation": translation_html})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Translation failed: {e}"}), 500
+
+
+@signature_bp.route("/generate_response/<doc_id>", methods=["POST"])
+def generate_response(doc_id):
+    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    if not os.path.exists(meta_path):
+        return jsonify({"success": False, "error": "Document metadata not found."}), 404
+
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    instructions = request.json.get("instructions", "")
+    tone = request.json.get("tone", "Professional")
+    
+    file_path = meta.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({"success": False, "error": "Document file not found."}), 404
+
+    text = ""
+    filename = file_path.lower()
+    
+
+    
+    try:
+        text = get_document_text(file_path)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error extracting text: {e}"}), 500
+
+    if not text.strip():
+        return jsonify({"success": False, "error": "No text content found to generate response."}), 400
+
+    try:
+        response_text = generate_response_content(text, instructions=instructions, tone=tone)
+        # Convert to HTML
+        response_html = markdown.markdown(response_text)
+        
+        # Save to metadata? Maybe not needed for response, but could be useful. 
+        # For now, let's just return it. Use-case is likely copy-pasting.
+        # meta["generated_response"] = response_html 
+        # write_metadata(meta)
+        
+        return jsonify({"success": True, "response": response_html})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Response generation failed: {e}"}), 500
 
 # Save drawn signature
 @signature_bp.route("/save_signature", methods=["POST"])

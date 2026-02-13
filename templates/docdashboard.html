@@ -5,8 +5,9 @@
     <h2 class="mb-4">Upload Document</h2>
     <form action="{{ url_for('signature.docupload') }}" method="POST" enctype="multipart/form-data" class="mb-5">
         <div class="mb-3">
-            <label for="pdfFile" class="form-label">Upload Document (PDF, DOCX, TXT)</label>
-            <input class="form-control" type="file" id="pdfFile" name="pdf_file" accept=".pdf,.docx,.txt">
+            <label for="pdfFile" class="form-label">Upload Document (PDF, DOCX, TXT, PNG, JPG)</label>
+            <input class="form-control" type="file" id="pdfFile" name="pdf_file"
+                accept=".pdf,.docx,.txt,.png,.jpg,.jpeg">
         </div>
         <button type="submit" class="btn btn-primary">Upload</button>
     </form>
