@@ -10,9 +10,9 @@
     <h2 class="mb-4">Upload Document</h2>
     <form action="{{ url_for('signature.docupload') }}" method="POST" enctype="multipart/form-data" class="mb-5">
         <div class="mb-3">
-            <label for="pdfFile" class="form-label">Upload Document (PDF, DOCX, TXT, PNG, JPG)</label>
+            <label for="pdfFile" class="form-label">Upload Document (PDF, DOCX, TXT, PNG, JPG, CSV, ZIP)</label>
             <input class="form-control" type="file" id="pdfFile" name="pdf_file"
-                accept=".pdf,.docx,.txt,.png,.jpg,.jpeg">
+                accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.csv,.zip">
         </div>
         <button type="submit" class="btn btn-primary">Upload</button>
     </form>
@@ -43,6 +43,7 @@
                 </td>
                 <td>
                     <div class="btn-group">
+                        {% if doc.type not in ['csv', 'zip'] %}
                         <a href="{{ url_for('signature.docview', doc_id=doc.id) }}" class="btn btn-sm btn-info"
                             title="View">View</a>
                         <a href="{{ url_for('signature.analyze_doc', doc_id=doc.id) }}"
@@ -51,6 +52,7 @@
                                 aria-hidden="true"></span>
                             <span class="btn-text">Analyse</span>
                         </a>
+                        {% endif %}
                         {% if doc.type == 'pdf' %}
                         <a href="{{ url_for('signature.docsign', doc_id=doc.id) }}" class="btn btn-sm btn-primary"
                             title="Sign">Sign</a>

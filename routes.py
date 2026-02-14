@@ -822,8 +822,8 @@ def docupload():
 
             extension = original_filename.split('.')[-1].lower() if '.' in original_filename else 'pdf'
             
-            # Allow images
-            allowed_extensions = {'pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg'}
+            # Allow images and data files
+            allowed_extensions = {'pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'csv', 'zip'}
             if extension not in allowed_extensions:
                  flash(f"Unsupported file type: {extension}", "danger")
                  return redirect(url_for("signature.docupload"))
