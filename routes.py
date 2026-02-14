@@ -24,11 +24,17 @@ from email.mime.application import MIMEApplication
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import hashlib
+import secrets
+from flask import session, g
 
 from openai import OpenAI
 import ollama
 import docx
 import markdown
+import pypdfium2 as pdfium
 import pdfplumber
 
 signature_bp = Blueprint("signature", __name__,
@@ -83,7 +89,156 @@ with open(CONFIG_FILE, "r", encoding="utf-8") as f:
 USE_OPENAI = config.get("use_openai", False)
 OPENAI_API_KEY = config.get("openai_api_key")
 OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
+# Config loading is done above, but we need to handle the case where salt isbytes
+# Salt should be stored as hex in json
+MASTER_PASSWORD_HASH = config.get("master_password_hash")
+SALT_HEX = config.get("salt")
+SALT = bytes.fromhex(SALT_HEX) if SALT_HEX else None
+
+USE_OPENAI = config.get("use_openai", False)
+OPENAI_API_KEY = config.get("openai_api_key")
+OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
+
+# We no longer use a static FERNET_KEY from config for file encryption
+# We will use one derived from the master password for the SESSION.
+# However, to avoid breaking existing functionality immediately, we keep this for now
+# or we can use it as a fallback?
+# Actually, the user wants "masterkey... acts as the key for encryption".
+# So we will use the session-stored key.
+# But for now, let's keep the variable but maybe unused.
 FERNET_KEY = config.get("fernet_key")
+
+def derive_key(password: str, salt: bytes) -> bytes:
+    """Derive a Fernet-compatible key from a password and salt."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=480000,
+    )
+    return base64.urlsafe_b64encode(kdf.derive(password.encode()))
+
+def hash_password(password: str, salt: bytes) -> str:
+    """Hash password for verification (using simpler hash for auth check, or same KDF)."""
+    # We can use the same KDF mechanism but maybe just hex digest for storage
+    # to avoid easy reversal if we used simple sha256.
+    # Let's use SHA256(password + salt) for authentication check
+    return hashlib.sha256(password.encode() + salt).hexdigest()
+
+# Middleware to check login
+def encrypt_file(file_path: str, key: bytes):
+    """Encrypt a file in place."""
+    f = Fernet(key)
+    with open(file_path, "rb") as file:
+        file_data = file.read()
+    encrypted_data = f.encrypt(file_data)
+    with open(file_path, "wb") as file:
+        file.write(encrypted_data)
+
+def decrypt_file_content(file_path: str, key: bytes) -> bytes:
+    """Decrypt file content. Returns raw bytes if decryption fails (legacy files)."""
+    with open(file_path, "rb") as file:
+        file_data = file.read()
+    
+    try:
+        f = Fernet(key)
+        return f.decrypt(file_data)
+    except Exception:
+        # Fallback for legacy unencrypted files
+        return file_data
+
+@signature_bp.before_request
+def check_login():
+    # Allow static resources and specific routes
+    if request.endpoint in ['static', 'signature.login', 'signature.setup', 'signature.logout']:
+        return
+
+    # If no master password set, force setup
+    global MASTER_PASSWORD_HASH
+    if not MASTER_PASSWORD_HASH:
+        return redirect(url_for('signature.setup'))
+
+    # Check if user has derived key in session (meaning they logged in)
+    if 'encryption_key' not in session:
+        return redirect(url_for('signature.login'))
+        
+    # Store key in g for easy access in this request
+    g.encryption_key = session['encryption_key'].encode()
+
+@signature_bp.route("/setup", methods=["GET", "POST"])
+def setup():
+    global MASTER_PASSWORD_HASH, SALT, config
+    
+    # If already setup, redirect to login
+    if MASTER_PASSWORD_HASH:
+         return redirect(url_for('signature.login'))
+
+    if request.method == "POST":
+        password = request.form.get("password")
+        confirm = request.form.get("confirm_password")
+        
+        if password != confirm:
+            flash("Passwords do not match!", "danger")
+            return render_template("setup.html")
+            
+        if not password:
+            flash("Password cannot be empty.", "danger")
+            return render_template("setup.html")
+
+        # Generate Salt
+        SALT = secrets.token_bytes(16)
+        SALT_HEX = SALT.hex()
+        
+        # Hash for auth
+        MASTER_PASSWORD_HASH = hash_password(password, SALT)
+        
+        # Save to config
+        config["master_password_hash"] = MASTER_PASSWORD_HASH
+        config["salt"] = SALT_HEX
+        
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+            
+        # Log user in immediately
+        derived_key = derive_key(password, SALT)
+        session['encryption_key'] = derived_key.decode()
+        
+        flash("Setup complete! You are now logged in.", "success")
+        return redirect(url_for("signature.index"))
+
+    return render_template("setup.html")
+
+@signature_bp.route("/login", methods=["GET", "POST"])
+def login():
+    global MASTER_PASSWORD_HASH, SALT
+    
+    if request.method == "POST":
+        password = request.form.get("password")
+        
+        if not SALT:
+             # Should not happen if hash exists, but safety check
+             flash("Error: Salt missing. Please reset config.", "danger")
+             return render_template("login.html")
+             
+        computed_hash = hash_password(password, SALT)
+        
+        if computed_hash == MASTER_PASSWORD_HASH:
+            # Success
+            derived_key = derive_key(password, SALT)
+            session['encryption_key'] = derived_key.decode()
+            flash("Logged in successfully.", "success")
+            return redirect(url_for("signature.index"))
+        else:
+            flash("Invalid password.", "danger")
+            
+    return render_template("login.html")
+
+@signature_bp.route("/logout")
+def logout():
+    session.pop('encryption_key', None)
+    flash("Logged out.", "info")
+    return redirect(url_for("signature.login"))
+
 
 def is_valid_fernet_key(key):
     if not key or not isinstance(key, str):
@@ -194,21 +349,32 @@ def save_metadata_for_doc_id(doc_id: str, updates: dict):
 
 
 def analyze_document_content(body: str, language: str = "English", style: str = "layman") -> str:
-    lang_prompt = f"Provide the analysis in {language}."
-    style_prompt = ""
-    if style == "layman":
-        style_prompt = (
-            "Explain everything in simple, layman terms that someone without a legal background can understand. "
-            "Avoid complex legal jargon, and if you must use it, explain it clearly."
-        )
+    user_prompt = config.get("analysis_prompt")
     
-    system_prompt = (
-        "You are an AI assistant specialized in analyzing legal documents, warranties, and agreements. "
-        f"Analyze the following document content. {lang_prompt} {style_prompt} "
-        "Summarize the key points, identify important obligations, "
-        "and highlight any potential risks or notable sections. "
-        "Format the output using clear markdown headers and bullet points."
-    )
+    if user_prompt:
+        # Simple string formatting for user prompt
+        # We allow placeholder {language} and {style}
+        system_prompt = user_prompt.replace("{language}", language).replace("{style}", style)
+        # Add basic role if not present? No, trust user prompt.
+    else:
+        lang_prompt = f"Provide the analysis in {language}."
+        style_prompt = ""
+        if style == "layman":
+            style_prompt = (
+                "Explain everything in simple, layman terms that someone without a legal background can understand. "
+                "Avoid complex legal jargon, and if you must use it, explain it clearly."
+            )
+        
+        system_prompt = (
+            "You are an expert legal analyst. "
+            f"Analyze the following document. {lang_prompt} {style_prompt} "
+            "Structure your response as follows:\n"
+            "1. **Executive Summary**: A brief overview.\n"
+            "2. **Key Obligations**: Main responsibilities for each party.\n"
+            "3. **Risk Assessment**: Potential risks, liabilities, or unusual clauses.\n"
+            "4. **Recommendations**: Verification or specific actions required.\n"
+            "Format the output in clean Markdown using headers and bullet points."
+        )
 
     if USE_OPENAI:
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -222,13 +388,14 @@ def analyze_document_content(body: str, language: str = "English", style: str = 
         return response.choices[0].message.content.strip()
     else:
         # Ollama
+        chat_model = config.get("chat_model", "llama3.2:latest")
         try:
             ollama.list()
         except Exception:
             raise Exception("Ollama server is not running. Start it with: ollama serve")
         try:
             response = ollama.chat(
-                model="llama3.2:latest",
+                model=chat_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": body}
@@ -239,8 +406,51 @@ def analyze_document_content(body: str, language: str = "English", style: str = 
             raise Exception(f"Ollama chat error: {e}")
 
 
-def extract_text_from_image(image_path: str) -> str:
-    """Extract text from an image using Ollama with llava model."""
+def get_available_vision_model():
+    """Check for available vision-capable models (llava, llama3.2-vision)."""
+    # If user selected a specific model in config, use it if available
+    user_pref = config.get("vision_model")
+    
+    try:
+        response = ollama.list()
+        # Handle response structure
+        if hasattr(response, 'models'):
+            models_list = response.models
+        elif isinstance(response, dict):
+            models_list = response.get('models', [])
+        else:
+            models_list = response
+        
+        available = []
+        for m in models_list:
+            name = getattr(m, 'model', m.get('model')) if hasattr(m, 'model') or isinstance(m, dict) else str(m)
+            available.append(name)
+            
+        # If user pref is valid, return it
+        if user_pref and user_pref in available:
+            return user_pref
+            
+        # Preference order
+        for candidate in ["llava:latest", "llama3.2-vision:latest"]:
+            if candidate in available:
+                return candidate
+                
+        # Fallback: check for any model containing 'vision' or 'llava'
+        for name in available:
+            if "vision" in name or "llava" in name:
+                return name
+                
+        return None
+    except Exception as e:
+        print(f"Error listing Ollama models: {e}")
+        return None
+
+def extract_text_from_image(image_path: str, raw_bytes: bytes = None) -> str:
+    """Extract text from an image using Ollama with a vision model.
+    Args:
+        image_path: Path to image file (will be decrypted if raw_bytes not provided)
+        raw_bytes: Optional raw image bytes (for temp files that aren't encrypted)
+    """
     if USE_OPENAI:
          # simple fallback or placeholder if user only has OpenAI key but not Ollama
          # For now, let's assume if they upload image they want local generic vision or we can use gpt-4o-mini vision if available
@@ -253,13 +463,25 @@ def extract_text_from_image(image_path: str) -> str:
     except Exception:
         raise Exception("Ollama server is not running. Start it with: ollama serve")
 
+    vision_model = get_available_vision_model()
+    if not vision_model:
+        # Try to pull llava if nothing found
+        try:
+             print("No vision model found. Attempting to pull llava:latest...")
+             ollama.pull("llava:latest")
+             vision_model = "llava:latest"
+        except Exception as e:
+             raise Exception(f"No vision model (llava or llama3.2-vision) found and failed to pull llava: {e}")
+
     try:
-        # We need to provide the image content to llava
-        with open(image_path, 'rb') as f:
-            image_bytes = f.read()
+        # Use provided raw bytes or decrypt from file
+        if raw_bytes:
+            image_bytes = raw_bytes
+        else:
+            image_bytes = decrypt_file_content(image_path, g.encryption_key)
             
         response = ollama.chat(
-            model="llava:latest", 
+            model=vision_model, 
             messages=[
                 {
                     'role': 'user',
@@ -268,10 +490,47 @@ def extract_text_from_image(image_path: str) -> str:
                 }
             ]
         )
-        return response['message']['content'].strip()
+        content = response['message']['content'].strip()
+        return content
     except Exception as e:
-        # Fallback to just saying it's an image if llava fails or model not found
-        print(f"Llava extraction failed: {e}")
+        print(f"Vision extraction failed with model {vision_model}: {e}")
+        return ""
+
+def extract_text_from_scanned_pdf(file_path: str) -> str:
+    """Render PDF pages to images and extract text using OCR (Ollama Vision)."""
+    text = ""
+    try:
+        # pypdfium2 needs path or bytes
+        file_bytes = decrypt_file_content(file_path, g.encryption_key)
+        pdf = pdfium.PdfDocument(file_bytes)
+        n_pages = len(pdf)
+        
+        # Limit pages to avoid taking forever on large docs for now
+        if n_pages > 5:
+            print(f"PDF has {n_pages} pages. OCRing first 5 pages only for performance.")
+            
+        for i in range(min(n_pages, 5)):
+            print(f"OCR processing page {i+1} of {min(n_pages, 5)}...")
+            page = pdf[i]
+            # Render page to bitmap, then to bytes
+            bitmap = page.render(scale=2.0) # 2.0 scale for better quality
+            pil_image = bitmap.to_pil()
+            
+            # Save to temp buffer
+            img_byte_arr = io.BytesIO()
+            pil_image.save(img_byte_arr, format='PNG')
+            img_bytes = img_byte_arr.getvalue()
+            
+            # Pass raw bytes directly to avoid encryption/decryption issues
+            page_text = extract_text_from_image("", raw_bytes=img_bytes)
+            if page_text:
+                text += page_text + "\n"
+                
+        return text
+    except Exception as e:
+        print(f"Scanned PDF extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 def get_document_text(file_path: str) -> str:
@@ -280,18 +539,29 @@ def get_document_text(file_path: str) -> str:
     filename = file_path.lower()
     
     if filename.endswith(".pdf"):
-        with pdfplumber.open(file_path) as pdf:
+        # For PDFplumber, we need a file-like object since we have bytes
+        file_bytes = decrypt_file_content(file_path, g.encryption_key)
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             for page in pdf.pages:
                 extracted = page.extract_text()
                 if extracted:
                     text += extracted + "\n"
+        
+        # If little to no text found, assume scanned and try OCR
+        if len(text.strip()) < 50:
+            print("Little text found in PDF. Attempting OCR (scanned PDF)...")
+            ocr_text = extract_text_from_scanned_pdf(file_path)
+            if ocr_text.strip():
+                text = ocr_text
     elif filename.endswith(".docx"):
-        doc = docx.Document(file_path)
+        # python-docx needs a file path or stream
+        file_bytes = decrypt_file_content(file_path, g.encryption_key)
+        doc = docx.Document(io.BytesIO(file_bytes))
         for para in doc.paragraphs:
             text += para.text + "\n"
     elif filename.endswith(".txt"):
-        with open(file_path, "r", encoding="utf-8") as f:
-            text = f.read()
+        file_bytes = decrypt_file_content(file_path, g.encryption_key)
+        text = file_bytes.decode("utf-8")
     elif filename.endswith((".png", ".jpg", ".jpeg")):
         text = extract_text_from_image(file_path)
     else:
@@ -300,12 +570,20 @@ def get_document_text(file_path: str) -> str:
     return text
 
 
-def translate_document_content(text: str, target_language: str = "English") -> str:
-    system_prompt = (
-        f"You are a professional translator. Translate the following text into {target_language}. "
-        "Maintain the original tone and formatting as much as possible. "
-        "Return only the translated text."
-    )
+def translate_document_content(text: str, target_language: str = "English", source_language: str = "auto") -> str:
+    user_prompt = config.get("translation_prompt")
+    
+    if user_prompt:
+        system_prompt = user_prompt.replace("{target_language}", target_language).replace("{source_language}", source_language)
+    else:
+        # Robust default prompt
+        source_instruction = f"from {source_language} " if source_language and source_language != "auto" else ""
+        system_prompt = (
+            f"You are a professional translator. Translate the following text {source_instruction}into {target_language}. "
+            "Maintain the original tone, formatting, and legal nuances (if any) as much as possible. "
+            "Return ONLY the translated text, with no introductory or concluding remarks. "
+            "Do not output markdown code blocks unless the original text contained them."
+        )
 
     if USE_OPENAI:
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -319,13 +597,14 @@ def translate_document_content(text: str, target_language: str = "English") -> s
         return response.choices[0].message.content.strip()
     else:
         # Ollama
+        chat_model = config.get("chat_model", "llama3.2:latest")
         try:
             ollama.list()
         except Exception:
             raise Exception("Ollama server is not running. Start it with: ollama serve")
         try:
             response = ollama.chat(
-                model="llama3.2:latest",
+                model=chat_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": text}
@@ -390,6 +669,23 @@ def index():
 def settings():
     global config, USE_OPENAI, OPENAI_API_KEY, OLLAMA_BASE_URL
     
+    # Fetch available Ollama models for dropdowns
+    ollama_models = []
+    try:
+        response = ollama.list()
+        if hasattr(response, 'models'):
+            models_list = response.models
+        elif isinstance(response, dict):
+            models_list = response.get('models', [])
+        else:
+            models_list = response
+            
+        for m in models_list:
+            name = getattr(m, 'model', m.get('model')) if hasattr(m, 'model') or isinstance(m, dict) else str(m)
+            ollama_models.append(name)
+    except Exception as e:
+        print(f"Error fetching Ollama models: {e}")
+
     if request.method == "POST":
         use_openai = request.form.get("use_openai") == "on"
         openai_key = request.form.get("openai_api_key", "").strip()
@@ -397,11 +693,22 @@ def settings():
         email = request.form.get("email", "").strip()
         app_password = request.form.get("app_password", "").strip()
         
+        # New settings
+        vision_model = request.form.get("vision_model")
+        chat_model = request.form.get("chat_model")
+        translation_prompt = request.form.get("translation_prompt")
+        analysis_prompt = request.form.get("analysis_prompt")
+        
         config["use_openai"] = use_openai
         config["openai_api_key"] = openai_key
         config["ollama_base_url"] = ollama_url
         config["email"] = email
         config["app_password"] = app_password
+        
+        if vision_model: config["vision_model"] = vision_model
+        if chat_model: config["chat_model"] = chat_model
+        if translation_prompt: config["translation_prompt"] = translation_prompt
+        if analysis_prompt: config["analysis_prompt"] = analysis_prompt
         
         # Save to CONFIG_FILE
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -415,7 +722,7 @@ def settings():
         flash("Settings updated successfully.", "success")
         return redirect(url_for("signature.index"))
         
-    return render_template("settings.html", config=config)
+    return render_template("settings.html", config=config, ollama_models=ollama_models)
 
 @signature_bp.route("/doc/send/<doc_id>", methods=["POST"])
 def doc_send(doc_id):
@@ -470,10 +777,10 @@ def doc_send(doc_id):
         msg.attach(MIMEText(message_text, 'plain'))
 
         # Attach file
-        with open(file_path, "rb") as f:
-            part = MIMEApplication(f.read(), Name=attachment_name)
-            part['Content-Disposition'] = f'attachment; filename="{attachment_name}"'
-            msg.attach(part)
+        file_bytes = decrypt_file_content(file_path, g.encryption_key)
+        part = MIMEApplication(file_bytes, Name=attachment_name)
+        part['Content-Disposition'] = f'attachment; filename="{attachment_name}"'
+        msg.attach(part)
 
         # Send email
         recipients = [to_email]
@@ -507,6 +814,11 @@ def docupload():
             stored_filename = f"{file_id}_{original_filename}"
             file_path = os.path.join(UPLOADS_DIR, stored_filename)
             pdf_file.save(file_path)
+
+            # Encrypt the file immediately
+            if 'encryption_key' in g:
+                encrypt_file(file_path, g.encryption_key)
+
 
             extension = original_filename.split('.')[-1].lower() if '.' in original_filename else 'pdf'
             
@@ -556,8 +868,34 @@ def docuploaded_file(filename):
 
             if meta.get("original_filename") == filename:
                 stored_filename = meta.get("stored_filename")
-                if stored_filename and os.path.exists(os.path.join(uploads_dir, stored_filename)):
-                    return send_from_directory(uploads_dir, stored_filename)
+    # Check if we should serve encrypted content decrypted
+    # Since send_from_directory reads raw file, we need a custom serve for encrypted files
+    # However, this route is for "docuploaded_file".
+    # We should see if file is encrypted.
+    
+    file_path = os.path.join(uploads_dir, stored_filename)
+    if not os.path.exists(file_path):
+         abort(404)
+
+    # Decrypt and serve
+    try:
+        if 'encryption_key' in g:
+            content = decrypt_file_content(file_path, g.encryption_key)
+            return send_file(
+                io.BytesIO(content),
+                mimetype='application/pdf' if filename.endswith('.pdf') else 'image/png', # simplistic mime
+                as_attachment=False,
+                download_name=filename
+            )
+        else:
+             # Should be caught by middleware but just in case
+             abort(403)
+    except Exception as e:
+        print(f"Error serving file: {e}")
+        abort(500)
+
+    # Fallback (never reached if logic holds)
+    return send_from_directory(uploads_dir, stored_filename)
 
     abort(404, description=f"No stored file found for {filename}")
 
@@ -647,7 +985,8 @@ def download_doc(doc_id):
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))
 
-    return send_file(file_path, as_attachment=True, download_name=meta.get("filename", doc_id))
+    content = decrypt_file_content(file_path, g.encryption_key)
+    return send_file(io.BytesIO(content), as_attachment=True, download_name=meta.get("filename", doc_id))
 
 
 @signature_bp.route("/save_signed_pdf", methods=["POST"])
@@ -672,6 +1011,10 @@ def save_signed_pdf():
     # create meta file
     # create meta file (use only the id in the meta filename)
     meta_path = os.path.join(UPLOADS_DIR, f"signed_{file_id}.json")
+
+    # Encrypt the signed file
+    if 'encryption_key' in g:
+        encrypt_file(signed_path, g.encryption_key)
 
     meta = {
         "id": f"signed_{file_id}",
@@ -781,37 +1124,99 @@ def translate_doc(doc_id):
         meta = json.load(f)
 
     target_language = request.json.get("language", "English")
-    
     file_path = meta.get("file_path")
     if not file_path or not os.path.exists(file_path):
         return jsonify({"success": False, "error": "Document file not found."}), 404
 
-    text = ""
-    filename = file_path.lower()
-    
+    data = request.json
+    target_language = data.get("language", "English")
+    source_language = data.get("source_language", "auto")
+    show_extracted = data.get("show_extracted_text", False)
 
-    
+    # Get doc text
     try:
         text = get_document_text(file_path)
     except Exception as e:
-        return jsonify({"success": False, "error": f"Error extracting text: {e}"}), 500
-
+         return jsonify({"error": f"Failed to extract text: {e}"}), 500
+         
     if not text.strip():
-        return jsonify({"success": False, "error": "No text content found to translate."}), 400
+        # Fallback for scanned PDF if not already handled inside get_document_text
+        # But get_document_text handles it now.
+        return jsonify({"error": "No text content found to translate."}), 400
 
     try:
-        translation = translate_document_content(text, target_language=target_language)
-        # Convert to HTML
-        translation_html = markdown.markdown(translation)
+        print(f"Starting translation to {target_language}, text length: {len(text)} chars")
+        translation = translate_document_content(text, target_language, source_language)
+        print(f"Translation completed, result length: {len(translation)} chars")
         
-        # Save to metadata
-        meta["translation"] = translation_html
-        meta["translation_language"] = target_language
-        write_metadata(meta)
+        # Convert translation to HTML for display
+        html_translation = markdown.markdown(translation)
         
-        return jsonify({"success": True, "translation": translation_html})
+        result = {"success": True, "translation": html_translation}
+        
+        # Include extracted text if requested
+        if show_extracted:
+            result["extracted_text"] = text
+        
+        return jsonify(result)
     except Exception as e:
-        return jsonify({"success": False, "error": f"Translation failed: {e}"}), 500
+        print(f"Translation error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@signature_bp.route("/save_translation/<doc_id>", methods=["POST"])
+def save_translation(doc_id):
+    """Save translation as a new .txt document"""
+    try:
+        data = request.json
+        translation_text = data.get("translation_text", "")
+        original_filename = data.get("original_filename", "document")
+        target_language = data.get("target_language", "")
+        
+        if not translation_text:
+            return jsonify({"success": False, "error": "No translation text provided"}), 400
+        
+        # Create new document ID
+        new_doc_id = str(uuid.uuid4())
+        
+        # Create filename
+        base_name = os.path.splitext(original_filename)[0]
+        new_filename = f"{base_name}_translated_{target_language}.txt"
+        
+        # Ensure uploads directory exists
+        os.makedirs(UPLOADS_DIR, exist_ok=True)
+        
+        # Save the text file (encrypted)
+        file_path = os.path.join(UPLOADS_DIR, f"{new_doc_id}.txt")
+        fernet = Fernet(g.encryption_key)
+        encrypted_content = fernet.encrypt(translation_text.encode('utf-8'))
+        with open(file_path, 'wb') as f:
+            f.write(encrypted_content)
+        
+        # Create metadata
+        metadata = {
+            "id": new_doc_id,
+            "filename": new_filename,
+            "type": "txt",
+            "status": "translated",
+            "file_path": file_path,
+            "uploaded_at": datetime.now().isoformat(),
+            "source_doc_id": doc_id,
+            "target_language": target_language
+        }
+        
+        # Save metadata
+        meta_path = os.path.join(UPLOADS_DIR, f"{new_doc_id}.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        
+        return jsonify({
+            "success": True,
+            "doc_id": new_doc_id,
+            "filename": new_filename
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @signature_bp.route("/generate_response/<doc_id>", methods=["POST"])

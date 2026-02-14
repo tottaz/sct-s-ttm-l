@@ -1,0 +1,13 @@
+{
+    "version": "1.1.0",
+    "build": "2026.02.14",
+    "name": "SCT Sättmal",
+    "features": [
+        "Master password authentication",
+        "File encryption",
+        "Document analysis with customizable prompts",
+        "Translation with source language selection",
+        "OCR support for images and scanned PDFs",
+        "Extracted text preview"
+    ]
+}

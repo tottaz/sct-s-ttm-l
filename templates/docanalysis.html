@@ -54,19 +54,22 @@
                                 <div class="mb-3">
                                     <label for="language" class="form-label">Language</label>
                                     <select class="form-select" id="language" name="language">
-                                        <option value="English" {% if doc.analysis_language=='English' %}selected{% endif %}>
+                                        <option value="English" {% if doc.analysis_language=='English' %}selected{%
+                                            endif %}>
                                             English</option>
-                                        <option value="Swedish" {% if doc.analysis_language=='Swedish' %}selected{% endif %}>
+                                        <option value="Swedish" {% if doc.analysis_language=='Swedish' %}selected{%
+                                            endif %}>
                                             Swedish</option>
                                     </select>
                                 </div>
                                 <div class="mb-3">
                                     <label for="style" class="form-label">Style</label>
                                     <select class="form-select" id="style" name="style">
-                                        <option value="layman" {% if doc.analysis_style=='layman' %}selected{% endif %}>Layman
+                                        <option value="layman" {% if doc.analysis_style=='layman' %}selected{% endif %}>
+                                            Layman
                                             Terms</option>
-                                        <option value="professional" {% if doc.analysis_style=='professional' %}selected{% endif
-                                            %}>Professional</option>
+                                        <option value="professional" {% if doc.analysis_style=='professional'
+                                            %}selected{% endif %}>Professional</option>
                                     </select>
                                 </div>
                                 <button type="submit" id="analyze-btn" class="btn btn-primary w-100">
@@ -81,6 +84,18 @@
                         <div class="tab-pane fade" id="pills-translate" role="tabpanel"
                             aria-labelledby="pills-translate-tab">
                             <div class="mb-3">
+                                <label for="source-language" class="form-label">Source Language</label>
+                                <select class="form-select" id="source-language">
+                                    <option value="auto">Auto-detect</option>
+                                    <option value="English">English</option>
+                                    <option value="Swedish">Swedish</option>
+                                    <option value="Dutch">Dutch</option>
+                                    <option value="Spanish">Spanish</option>
+                                    <option value="German">German</option>
+                                    <option value="French">French</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
                                 <label for="trans-language" class="form-label">Target Language</label>
                                 <select class="form-select" id="trans-language">
                                     <option value="English">English</option>
@@ -91,6 +106,14 @@
                                     <option value="French">French</option>
                                 </select>
                             </div>
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="show-extracted-text" checked>
+                                <label class="form-check-label" for="show-extracted-text">
+                                    Show extracted text
+                                </label>
+                                <div class="form-text">Display the OCR/extracted text before translation (for
+                                    images/PDFs)</div>
+                            </div>
                             <button id="translate-btn" class="btn btn-primary w-100">
                                 <span id="trans-spinner" class="spinner-border spinner-border-sm d-none" role="status"
                                     aria-hidden="true"></span>
@@ -99,9 +122,11 @@
                         </div>
 
                         <!-- Respond Tab -->
-                        <div class="tab-pane fade" id="pills-respond" role="tabpanel" aria-labelledby="pills-respond-tab">
+                        <div class="tab-pane fade" id="pills-respond" role="tabpanel"
+                            aria-labelledby="pills-respond-tab">
                             <div class="mb-3">
-                                <label for="resp-instructions" class="form-label">Additional Instructions (Optional)</label>
+                                <label for="resp-instructions" class="form-label">Additional Instructions
+                                    (Optional)</label>
                                 <textarea class="form-control" id="resp-instructions" rows="3"
                                     placeholder="E.g., Accept the offer, but ask for a lower price."></textarea>
                             </div>
@@ -129,7 +154,13 @@
             <div class="card shadow-sm">
                 <div class="card-header bg-white d-flex justify-content-between align-items-center">
                     <h4 class="mb-0" id="result-title">Analysis Result</h4>
-                    <button class="btn btn-sm btn-outline-primary" onclick="copyResult()">Copy to Clipboard</button>
+                    <div>
+                        <button class="btn btn-sm btn-outline-primary" onclick="copyResult()">Copy to Clipboard</button>
+                        <button class="btn btn-sm btn-success d-none" id="save-translation-btn"
+                            onclick="saveTranslation()">
+                            <i class="bi bi-download"></i> Save Translation
+                        </button>
+                    </div>
                 </div>
                 <div class="card-body" id="result-content">
                     <div id="content-display" class="analysis-result">
@@ -146,6 +177,16 @@
                 </div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; justify-content: center; align-items: center;">
+    <div class="text-center" style="color: white;">
+        <div class="spinner-border" style="width: 4rem; height: 4rem;" role="status"></div>
+        <h4 class="mt-3" id="loading-message">Processing...</h4>
+        <p id="loading-detail" class="text-muted"></p>
     </div>
 </div>
 {% endblock %}
@@ -174,6 +215,8 @@
     // Translation Handling
     document.getElementById('translate-btn').addEventListener('click', function () {
         const lang = document.getElementById('trans-language').value;
+        const sourceLang = document.getElementById('source-language').value;
+        const showExtracted = document.getElementById('show-extracted-text').checked;
         const btn = this;
         const spinner = document.getElementById('trans-spinner');
         const text = document.getElementById('trans-btn-text');
@@ -184,33 +227,102 @@
         spinner.classList.remove('d-none');
         text.textContent = ' Translating...';
 
+        // Show loading overlay
+        const overlay = document.getElementById('loading-overlay');
+        const loadingMsg = document.getElementById('loading-message');
+        const loadingDetail = document.getElementById('loading-detail');
+        overlay.style.display = 'flex';
+        loadingMsg.textContent = 'Translating...';
+        loadingDetail.textContent = 'This may take a moment for images and scanned PDFs.';
+
         fetch("{{ url_for('signature.translate_doc', doc_id=doc.id) }}", {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ language: lang })
+            body: JSON.stringify({ language: lang, source_language: sourceLang, show_extracted_text: showExtracted })
         })
-        .then(response => response.json())
-        .then(data => {
-            btn.disabled = false;
-            spinner.classList.add('d-none');
-            text.textContent = 'Translate';
+            .then(response => response.json())
+            .then(data => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                text.textContent = 'Translate';
+                overlay.style.display = 'none';
 
-            if (data.success) {
-                display.innerHTML = data.translation;
-                title.textContent = "Translation (" + lang + ")";
-            } else {
-                alert("Error: " + data.error);
-            }
-        })
-        .catch(error => {
-            btn.disabled = false;
-            spinner.classList.add('d-none');
-            text.textContent = 'Translate';
-            alert("Error: " + error);
-        });
+                if (data.success) {
+                    let output = '';
+
+                    // Show extracted text if requested and available
+                    if (showExtracted && data.extracted_text) {
+                        output += '<div class="alert alert-info">';
+                        output += '<h6 class="alert-heading">Extracted Text:</h6>';
+                        output += '<pre style="white-space: pre-wrap; font-size: 0.9em;">' + data.extracted_text + '</pre>';
+                        output += '</div><hr>';
+                    }
+
+                    output += data.translation;
+                    display.innerHTML = output;
+                    title.textContent = "Translation (" + lang + ")";
+
+                    // Show save button and store translation data
+                    const saveBtn = document.getElementById('save-translation-btn');
+                    saveBtn.classList.remove('d-none');
+                    saveBtn.dataset.translationText = data.translation.replace(/<[^>]+>/g, ''); // Strip HTML
+                    saveBtn.dataset.targetLanguage = lang;
+                } else {
+                    alert("Error: " + data.error);
+                }
+            })
+            .catch(error => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                text.textContent = 'Translate';
+                overlay.style.display = 'none';
+                alert("Error: " + error);
+            });
     });
+
+    // Save Translation Function
+    function saveTranslation() {
+        const saveBtn = document.getElementById('save-translation-btn');
+        const translationText = saveBtn.dataset.translationText;
+        const targetLanguage = saveBtn.dataset.targetLanguage;
+        const overlay = document.getElementById('loading-overlay');
+        const loadingMsg = document.getElementById('loading-message');
+
+        if (!translationText) {
+            alert('No translation to save');
+            return;
+        }
+
+        overlay.style.display = 'flex';
+        loadingMsg.textContent = 'Saving translation...';
+
+        fetch("{{ url_for('signature.save_translation', doc_id=doc.id) }}", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                translation_text: translationText,
+                original_filename: "{{ doc.filename }}",
+                target_language: targetLanguage
+            })
+        })
+            .then(response => response.json())
+            .then(data => {
+                overlay.style.display = 'none';
+                if (data.success) {
+                    alert('Translation saved as: ' + data.filename);
+                    window.location.href = "{{ url_for('signature.docupload') }}";
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                overlay.style.display = 'none';
+                alert('Error: ' + error);
+            });
+    }
+
 
     // Response Generation Handling
     document.getElementById('respond-btn').addEventListener('click', function () {
@@ -233,25 +345,25 @@
             },
             body: JSON.stringify({ instructions: instructions, tone: tone })
         })
-        .then(response => response.json())
-        .then(data => {
-            btn.disabled = false;
-            spinner.classList.add('d-none');
-            text.textContent = 'Generate Response';
+            .then(response => response.json())
+            .then(data => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                text.textContent = 'Generate Response';
 
-            if (data.success) {
-                display.innerHTML = data.response;
-                title.textContent = "Generated Response";
-            } else {
-                alert("Error: " + data.error);
-            }
-        })
-        .catch(error => {
-            btn.disabled = false;
-            spinner.classList.add('d-none');
-            text.textContent = 'Generate Response';
-            alert("Error: " + error);
-        });
+                if (data.success) {
+                    display.innerHTML = data.response;
+                    title.textContent = "Generated Response";
+                } else {
+                    alert("Error: " + data.error);
+                }
+            })
+            .catch(error => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                text.textContent = 'Generate Response';
+                alert("Error: " + error);
+            });
     });
 </script>
 <style>

@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/datatables.min.css') }}">
+{% endblock %}
+
+
 {% block content %}
 <div class="container py-4">
     <h2 class="mb-4">Upload Document</h2>
@@ -13,7 +18,7 @@
     </form>
 
     <h3>Your Documents</h3>
-    <table class="table table-bordered">
+    <table class="table table-bordered table-striped table-hover" id="documents-table">
         <thead>
             <tr>
                 <th>Document</th>
@@ -71,7 +76,29 @@
 
 {% block script %}
 {{ super() }}
+<script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/datatables.min.js') }}"></script>
 <script>
+    // Initialize DataTables
+    $(document).ready(function () {
+        $('#documents-table').DataTable({
+            "pageLength": 10,
+            "lengthMenu": [[10, 25, 50, -1], [10, 25, 50, "All"]],
+            "order": [[3, "desc"]], // Sort by upload date descending
+            "columnDefs": [
+                { "orderable": false, "targets": 4 } // Disable sorting on Actions column
+            ],
+            "language": {
+                "search": "Search documents:",
+                "lengthMenu": "Show _MENU_ documents per page",
+                "info": "Showing _START_ to _END_ of _TOTAL_ documents",
+                "infoEmpty": "No documents available",
+                "infoFiltered": "(filtered from _MAX_ total documents)"
+            }
+        });
+    });
+
+    // Analyze link spinner
     document.querySelectorAll('.analyze-link').forEach(link => {
         link.addEventListener('click', function (e) {
             if (this.classList.contains('disabled')) {

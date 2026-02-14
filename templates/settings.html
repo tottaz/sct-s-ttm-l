@@ -35,6 +35,53 @@
                         <div class="form-text">The address where your local Ollama server is running.</div>
                     </div>
 
+                    <div id="ollama_models_section">
+                        <hr class="my-4">
+                        <h6 class="mb-3 text-primary">Model Selection</h6>
+
+                        <div class="mb-3">
+                            <label for="vision_model" class="form-label fw-bold">Vision Model (for images/scanned
+                                PDFs)</label>
+                            <select class="form-select" id="vision_model" name="vision_model">
+                                <option value="" {% if not config.vision_model %}selected{% endif %}>Auto-detect
+                                </option>
+                                {% for model in ollama_models %}
+                                <option value="{{ model }}" {% if config.vision_model==model %}selected{% endif %}>{{
+                                    model }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Select a vision-capable model (like llava or llama3.2-vision).</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="chat_model" class="form-label fw-bold">Chat/Analysis Model</label>
+                            <select class="form-select" id="chat_model" name="chat_model">
+                                {% for model in ollama_models %}
+                                <option value="{{ model }}" {% if config.chat_model==model or (not config.chat_model and
+                                    model=='llama3.2:latest' ) %}selected{% endif %}>{{ model }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Used for analysis and translation. Default: llama3.2:latest</div>
+                        </div>
+                    </div>
+
+                    <hr class="my-4">
+                    <h6 class="mb-3 text-primary">Custom Prompts</h6>
+
+                    <div class="mb-3">
+                        <label for="translation_prompt" class="form-label fw-bold">Translation Prompt</label>
+                        <textarea class="form-control" id="translation_prompt" name="translation_prompt" rows="3"
+                            placeholder="Default prompt will be used if empty. Use {target_language} as placeholder.">{{ config.translation_prompt }}</textarea>
+                        <div class="form-text">Customize how the AI translates documents.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="analysis_prompt" class="form-label fw-bold">Analysis Prompt</label>
+                        <textarea class="form-control" id="analysis_prompt" name="analysis_prompt" rows="4"
+                            placeholder="Default prompt will be used if empty. Use {language} and {style} as placeholders.">{{ config.analysis_prompt }}</textarea>
+                        <div class="form-text">Customize the instructions for document analysis.</div>
+                    </div>
+
                     <hr class="my-4">
                     <h6 class="mb-3 text-primary">Mail Settings (Gmail)</h6>
 
