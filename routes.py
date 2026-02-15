@@ -1345,8 +1345,20 @@ def serve_doc(doc_id):
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))
 
-    # Serve PDF inline
-    return send_file(file_path, mimetype='application/pdf')
+    try:
+        # Serve PDF inline
+        # Read and decrypt file content
+        content = decrypt_file_content(file_path, g.encryption_key)
+
+        return send_file(
+            io.BytesIO(content),
+            mimetype='application/pdf',
+            as_attachment=False,
+            download_name=meta.get("filename", doc_id)
+        )
+    except Exception as e:
+        flash(f"Error serving document: {e}", "danger")
+        return redirect(url_for("signature.index"))
 
 
 @signature_bp.route("/download_signed/<doc_id>")
@@ -1361,12 +1373,26 @@ def download_signed(doc_id):
         meta = json.load(f)
 
     signed_path = meta.get("stored_filename")
-    if not signed_path or not os.path.exists(os.path.join(UPLOADS_DIR, signed_path)):
+    
+    if not signed_path:
+        flash("Signed file metadata missing", "danger")
+        return redirect(url_for("signature.index"))
+
+    full_path = os.path.join(UPLOADS_DIR, signed_path)
+
+    if not os.path.exists(full_path):
         flash("Signed file not found", "danger")
         return redirect(url_for("signature.index"))
 
-    return send_file(
-        os.path.join(UPLOADS_DIR, signed_path),
-        as_attachment=True,
-        download_name=meta.get("filename")
-    )
+    try:
+        content = decrypt_file_content(full_path, g.encryption_key)
+        
+        return send_file(
+            io.BytesIO(content), 
+            as_attachment=True, 
+            download_name=meta.get("filename"),
+            mimetype="application/pdf"
+        )
+    except Exception as e:
+        flash(f"Error downloading signed document: {e}", "danger")
+        return redirect(url_for("signature.index"))
