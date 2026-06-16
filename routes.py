@@ -108,6 +108,12 @@ OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
 # But for now, let's keep the variable but maybe unused.
 FERNET_KEY = config.get("fernet_key")
 
+# Ensure categories exist in config
+if "categories" not in config:
+    config["categories"] = ["Contract", "Invoice", "Report", "Image", "Other"]
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
 def derive_key(password: str, salt: bytes) -> bytes:
     """Derive a Fernet-compatible key from a password and salt."""
     kdf = PBKDF2HMAC(
@@ -799,6 +805,105 @@ def doc_send(doc_id):
     except Exception as e:
         return jsonify({"error": f"Failed to send email: {str(e)}"}), 500
 
+@signature_bp.route("/api/train_local_gpt", methods=["POST"])
+def train_local_gpt():
+    method = request.json.get("method", "pytorch")
+    # Spawn background training process
+    import subprocess
+    import threading
+    
+    def run_training(key_bytes, train_method):
+        try:
+            script_path = os.path.join(DATA_BASE_DIR, "scripts", "train_to_gguf.py")
+            # Using the same python executable as the app
+            subprocess.run([sys.executable, script_path, "--key", key_bytes.decode(), "--data-dir", DATA_BASE_DIR, "--method", train_method], check=True)
+            print(f"Finished training local GPT model using {train_method}.")
+        except Exception as e:
+            print(f"Error during local GPT training: {e}")
+
+    thread = threading.Thread(target=run_training, args=(g.encryption_key, method))
+    thread.daemon = True
+    thread.start()
+    return jsonify({"success": True, "message": "Local GPT training started in background."})
+
+@signature_bp.route("/api/training_status", methods=["GET"])
+def training_status():
+    status_file = os.path.join(DATA_BASE_DIR, "training_status.json")
+    if os.path.exists(status_file):
+        try:
+            with open(status_file, "r") as f:
+                data = json.load(f)
+                return jsonify(data)
+        except Exception:
+            return jsonify({"status": "unknown", "message": "Could not read status file."})
+    return jsonify({"status": "unknown", "message": "No training status found."})
+
+@signature_bp.route("/api/search_local_gpt", methods=["POST"])
+def search_local_gpt():
+    query = request.json.get("query", "")
+    if not query:
+        return jsonify({"error": "Query is required"}), 400
+        
+    try:
+        response = ollama.chat(
+            model="local-gpt",
+            messages=[{"role": "user", "content": query}]
+        )
+        return jsonify({"success": True, "response": response["message"]["content"]})
+    except Exception as e:
+        return jsonify({"error": f"Failed to search local GPT: {str(e)}"}), 500
+
+
+# Categories API
+@signature_bp.route("/api/categories", methods=["GET", "POST"])
+def categories_api():
+    global config
+    if request.method == "GET":
+        cats = config.get("categories", ["Contract", "Invoice", "Report", "Image", "Other"])
+        return jsonify({"categories": cats})
+
+    # POST – add a new category
+    name = (request.json or {}).get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Category name is required"}), 400
+    cats = list(config.get("categories", []))
+    if name in cats:
+        return jsonify({"error": "Category already exists"}), 400
+    cats.append(name)
+    config["categories"] = cats
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    return jsonify({"categories": cats})
+
+
+@signature_bp.route("/api/categories/<name>", methods=["DELETE", "PUT"])
+def category_item_api(name):
+    global config
+    cats = list(config.get("categories", []))
+
+    if request.method == "DELETE":
+        if name not in cats:
+            return jsonify({"error": "Category not found"}), 404
+        cats.remove(name)
+        config["categories"] = cats
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        return jsonify({"categories": cats})
+
+    # PUT – rename
+    new_name = (request.json or {}).get("name", "").strip()
+    if not new_name:
+        return jsonify({"error": "New name is required"}), 400
+    if name not in cats:
+        return jsonify({"error": "Category not found"}), 404
+    if new_name in cats:
+        return jsonify({"error": "Category already exists"}), 400
+    cats[cats.index(name)] = new_name
+    config["categories"] = cats
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    return jsonify({"categories": cats})
+
 
 # View PDF
 @signature_bp.route("/docupload", methods=["GET", "POST"])
@@ -828,11 +933,19 @@ def docupload():
                  flash(f"Unsupported file type: {extension}", "danger")
                  return redirect(url_for("signature.docupload"))
 
+            # Read optional user-supplied metadata from form
+            title = request.form.get("title", "").strip() or os.path.splitext(original_filename)[0]
+            description = request.form.get("description", "").strip()
+            category = request.form.get("doc_type", "").strip()
+
             meta = {
                 "id": file_id,
                 "original_filename": original_filename,
                 "stored_filename": stored_filename,
                 "filename": original_filename,
+                "title": title,
+                "description": description,
+                "category": category,
                 "file_path": file_path,
                 "type": extension,
                 "status": "uploaded",
@@ -937,6 +1050,8 @@ def docview(doc_id):
         meta["view_url"] = url_for("signature.serve_doc", doc_id=doc_id)
     elif meta.get("type") == "google_doc":
         meta["view_url"] = meta.get("url")
+    elif meta.get("type") in ("jpg", "jpeg", "png"):
+        meta["view_url"] = url_for("signature.serve_doc", doc_id=doc_id)
     else:
         meta["view_url"] = None
 
@@ -1350,9 +1465,17 @@ def serve_doc(doc_id):
         # Read and decrypt file content
         content = decrypt_file_content(file_path, g.encryption_key)
 
+        file_type = meta.get("type", "").lower()
+        if file_type in ("jpg", "jpeg"):
+            mime = "image/jpeg"
+        elif file_type == "png":
+            mime = "image/png"
+        else:
+            mime = "application/pdf"
+
         return send_file(
             io.BytesIO(content),
-            mimetype='application/pdf',
+            mimetype=mime,
             as_attachment=False,
             download_name=meta.get("filename", doc_id)
         )

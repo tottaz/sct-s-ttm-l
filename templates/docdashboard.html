@@ -9,15 +9,40 @@
 <div class="container py-4">
     <h2 class="mb-4">Upload Document</h2>
     <form action="{{ url_for('signature.docupload') }}" method="POST" enctype="multipart/form-data" class="mb-5">
-        <div class="mb-3">
-            <label for="pdfFile" class="form-label">Upload Document (PDF, DOCX, TXT, PNG, JPG, CSV, ZIP)</label>
-            <input class="form-control" type="file" id="pdfFile" name="pdf_file"
-                accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.csv,.zip">
+        <div class="row g-3">
+            <div class="col-12">
+                <label for="pdfFile" class="form-label fw-semibold">File <span class="text-muted fw-normal">(PDF, DOCX, TXT, PNG, JPG, CSV, ZIP)</span></label>
+                <input class="form-control" type="file" id="pdfFile" name="pdf_file"
+                    accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.csv,.zip">
+            </div>
+            <div class="col-md-6">
+                <label for="docTitle" class="form-label fw-semibold">Title</label>
+                <input class="form-control" type="text" id="docTitle" name="title" placeholder="Document title (auto-filled from filename)">
+            </div>
+            <div class="col-md-6">
+                <label for="docType" class="form-label fw-semibold">Category</label>
+                <select class="form-select" id="docType" name="doc_type">
+                    <option value="">-- Select category --</option>
+                </select>
+            </div>
+            <div class="col-12">
+                <label for="docDescription" class="form-label fw-semibold">Description</label>
+                <textarea class="form-control" id="docDescription" name="description" rows="2" placeholder="Optional description"></textarea>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Upload</button>
+            </div>
         </div>
-        <button type="submit" class="btn btn-primary">Upload</button>
     </form>
 
-    <h3>Your Documents</h3>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">Your Documents</h3>
+        <div>
+            <button id="train-local-gpt-btn" class="btn btn-secondary me-2">Train Custom Model</button>
+            <button id="search-local-gpt-btn" class="btn btn-outline-primary" data-bs-toggle="modal"
+                data-bs-target="#searchGptModal">Search with Custom Model</button>
+        </div>
+    </div>
     <table class="table table-bordered table-striped table-hover" id="documents-table">
         <thead>
             <tr>
@@ -31,7 +56,11 @@
         <tbody>
             {% for doc in docs %}
             <tr>
-                <td>{{ doc.filename }}</td>
+                <td>
+                    <div class="fw-semibold">{{ doc.title or doc.filename }}</div>
+                    {% if doc.description %}<div class="text-muted small">{{ doc.description }}</div>{% endif %}
+                    {% if doc.category %}<span class="badge bg-secondary">{{ doc.category }}</span>{% endif %}
+                </td>
                 <td>{{ doc.type }}</td>
                 <td>{{ doc.status }}</td>
                 <td>
@@ -81,6 +110,31 @@
 <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/datatables.min.js') }}"></script>
 <script>
+    // Auto-fill title from selected filename
+    document.getElementById('pdfFile').addEventListener('change', function () {
+        const file = this.files[0];
+        if (file) {
+            const titleInput = document.getElementById('docTitle');
+            if (!titleInput.value) {
+                titleInput.value = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+            }
+        }
+    });
+
+    // Populate category dropdown from API
+    fetch("{{ url_for('signature.categories_api') }}")
+        .then(r => r.json())
+        .then(data => {
+            const sel = document.getElementById('docType');
+            (data.categories || []).forEach(cat => {
+                const opt = document.createElement('option');
+                opt.value = cat;
+                opt.textContent = cat;
+                sel.appendChild(opt);
+            });
+        })
+        .catch(() => {});
+
     // Initialize DataTables
     $(document).ready(function () {
         $('#documents-table').DataTable({
@@ -116,5 +170,161 @@
             text.textContent = ' Analysing...';
         });
     });
+
+    // Train local GPT button opens modal instead
+    $('#train-local-gpt-btn').click(function () {
+        $('#trainOptionsModal').modal('show');
+    });
+
+    let trainingPollInterval = null;
+
+    function pollTrainingStatus() {
+        $.ajax({
+            url: "{{ url_for('signature.training_status') }}",
+            type: "GET",
+            success: function (data) {
+                if (data.status === "running") {
+                    $('#training-status-text').text(data.message || 'Training...');
+                    $('#trainOptionsModal').modal('hide');
+                    $('#trainingProgressModal').modal('show');
+                } else if (data.status === "completed") {
+                    clearInterval(trainingPollInterval);
+                    $('#trainingProgressModal').modal('hide');
+                    alert("Training completed! You can now search with the custom model.");
+                } else if (data.status === "error") {
+                    clearInterval(trainingPollInterval);
+                    $('#trainingProgressModal').modal('hide');
+                    alert("Training failed: " + data.message);
+                }
+            }
+        });
+    }
+
+    $('#start-training-btn').click(function () {
+        let method = $('input[name="trainMethod"]:checked').val();
+
+        $.ajax({
+            url: "{{ url_for('signature.train_local_gpt') }}",
+            type: "POST",
+            contentType: "application/json",
+            data: JSON.stringify({ method: method }),
+            success: function (data) {
+                $('#trainOptionsModal').modal('hide');
+                $('#trainingProgressModal').modal({ backdrop: 'static', keyboard: false }).modal('show');
+                $('#training-status-text').text("Starting training background process...");
+                // Start polling
+                if (trainingPollInterval) clearInterval(trainingPollInterval);
+                trainingPollInterval = setInterval(pollTrainingStatus, 3000);
+            },
+            error: function (err) {
+                alert("Error starting training.");
+            }
+        });
+    });
+
+    // Search local GPT
+    $('#submit-gpt-search').click(function () {
+        let query = $('#gpt-search-input').val().trim();
+        if (!query) return;
+
+        let resultDiv = $('#gpt-search-result');
+        let btn = $(this);
+        let originalText = btn.text();
+
+        btn.prop('disabled', true).text('Searching...');
+        resultDiv.html('<div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>');
+
+        $.ajax({
+            url: "{{ url_for('signature.search_local_gpt') }}",
+            type: "POST",
+            contentType: "application/json",
+            data: JSON.stringify({ query: query }),
+            success: function (data) {
+                if (data.success) {
+                    resultDiv.html('<div class="alert alert-success mt-3">' + data.response.replace(/\n/g, '<br>') + '</div>');
+                } else {
+                    resultDiv.html('<div class="alert alert-danger mt-3">Error: ' + data.error + '</div>');
+                }
+                btn.prop('disabled', false).text(originalText);
+            },
+            error: function (err) {
+                resultDiv.html('<div class="alert alert-danger mt-3">Error searching custom model. Is Ollama running and model trained?</div>');
+                btn.prop('disabled', false).text(originalText);
+            }
+        });
+    });
 </script>
+
+<!-- Training Options Modal -->
+<div class="modal fade" id="trainOptionsModal" tabindex="-1" aria-labelledby="trainOptionsModalLabel"
+    aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="trainOptionsModalLabel">Train Custom Local Model</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p>Choose the training backend. PyTorch is massively faster and recommended. Pure Python has zero
+                    dependencies but is extremely slow.</p>
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="trainMethod" id="methodPytorch" value="pytorch"
+                        checked>
+                    <label class="form-check-label font-weight-bold" for="methodPytorch">
+                        PyTorch (Recommended, Fast)
+                    </label>
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="radio" name="trainMethod" id="methodPython" value="python">
+                    <label class="form-check-label text-danger" for="methodPython">
+                        Pure Python (0 process dependencies, VERY Slow)
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="start-training-btn">Start Training</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Training Progress Modal -->
+<div class="modal fade" id="trainingProgressModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1"
+    aria-labelledby="trainingProgressModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body text-center p-5">
+                <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
+                    <span class="visually-hidden">Training...</span>
+                </div>
+                <h5 id="training-status-text">Training model in progress...</h5>
+                <p class="text-muted small mt-2">Please keep this page open. This may take a few minutes depending on
+                    your documents and the chosen framework.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Search Custom GPT Modal -->
+<div class="modal fade" id="searchGptModal" tabindex="-1" aria-labelledby="searchGptModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="searchGptModalLabel">Search Custom Local Model</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Ask questions about your uploaded documents using the locally trained custom
+                    model.</p>
+                <div class="input-group mb-3">
+                    <input type="text" id="gpt-search-input" class="form-control" placeholder="Ask a question..."
+                        aria-label="Ask a question">
+                    <button class="btn btn-primary" type="button" id="submit-gpt-search">Ask</button>
+                </div>
+                <div id="gpt-search-result" class="mt-3"></div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}

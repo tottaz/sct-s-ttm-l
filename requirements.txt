@@ -9,3 +9,5 @@ markdown
 pywebview
 pyinstaller
 pypdfium2>=4.0.0
+gguf
+torch

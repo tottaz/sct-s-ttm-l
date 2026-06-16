@@ -2,29 +2,61 @@
 
 {% block content %}
 <div class="container py-4">
-    <h2>View Document</h2>
-
-    <div class="mb-3">
-        <p><strong>Filename:</strong> {{ doc.filename }}</p>
-        <p><strong>Type:</strong> {{ doc.type }}</p>
-        <p><strong>Status:</strong> {{ doc.status }}</p>
-        <p><strong>Uploaded:</strong> {{ (doc.uploaded_at | todatetime).strftime('%Y-%m-%d %H:%M') if doc.uploaded_at
-            else '' }}</p>
+    <div class="d-flex align-items-center gap-2 mb-4">
+        <a href="{{ url_for('signature.index') }}" class="btn btn-outline-secondary btn-sm">
+            ← Back to Dashboard
+        </a>
+        <h2 class="mb-0">View Document</h2>
     </div>
 
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-1">{{ doc.title or doc.filename }}</h5>
+            {% if doc.description %}
+            <p class="text-muted mb-2">{{ doc.description }}</p>
+            {% endif %}
+            <div class="d-flex gap-3 flex-wrap text-muted small">
+                <span><strong>File:</strong> {{ doc.filename }}</span>
+                <span><strong>Type:</strong> {{ doc.type | upper }}</span>
+                {% if doc.category %}<span><strong>Category:</strong> {{ doc.category }}</span>{% endif %}
+                <span><strong>Status:</strong> {{ doc.status }}</span>
+                <span><strong>Uploaded:</strong> {{ (doc.uploaded_at | todatetime).strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else '' }}</span>
+            </div>
+        </div>
+    </div>
+
+    {# ── PDF viewer ── #}
     {% if doc.type == 'pdf' and doc.view_url %}
-    <div style="height: 600px;">
-        <iframe src="{{ doc.view_url }}" width="100%" height="100%" style="border:none;"></iframe>
+    <div style="height: 700px; border: 1px solid #dee2e6; border-radius: 8px; overflow: hidden;">
+        <iframe id="docFrame" src="{{ doc.view_url }}#toolbar=0&navpanes=0&scrollbar=1"
+                width="100%" height="100%" style="border:none;"></iframe>
     </div>
+
+    {# ── Image viewer ── #}
+    {% elif doc.type in ['jpg', 'jpeg', 'png'] and doc.view_url %}
+    <div class="text-center bg-dark rounded p-3" style="max-height: 80vh; overflow: auto;">
+        <img src="{{ doc.view_url }}" alt="{{ doc.title or doc.filename }}"
+             style="max-width: 100%; max-height: 75vh; object-fit: contain; border-radius: 4px;">
+    </div>
+
     {% else %}
-    <p>Cannot display this document type.</p>
+    <div class="alert alert-warning">
+        Preview is not available for this file type (<strong>{{ doc.type }}</strong>).
+        Use the Download button below to open the file.
+    </div>
     {% endif %}
 
+    <div class="mt-4 d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('signature.index') }}" class="btn btn-secondary">← Back to Dashboard</a>
 
-    <div class="mt-3">
-        <a href="{{ url_for('signature.index') }}" class="btn btn-secondary">Back to Dashboard</a>
+        {# JS-powered in-app download — avoids new-window issues in WebView #}
+        <button id="btnDownload" class="btn btn-success" data-doc-id="{{ doc.id }}" data-filename="{{ doc.filename }}">
+            <span id="dlSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+            ⬇ Download
+        </button>
+
         <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#emailModal">
-            Send Email
+            ✉ Send Email
         </button>
     </div>
 </div>
@@ -79,6 +111,43 @@
 </div>
 
 <script>
+    // ── In-app Blob download (no new window / no OS save dialog issues in WebView) ──
+    document.getElementById('btnDownload').addEventListener('click', function () {
+        const btn = this;
+        const spinner = document.getElementById('dlSpinner');
+        const docId = btn.dataset.docId;
+        const filename = btn.dataset.filename;
+
+        btn.disabled = true;
+        spinner.classList.remove('d-none');
+
+        fetch(`/download/${docId}`)
+            .then(response => {
+                if (!response.ok) throw new Error('Download failed');
+                return response.blob();
+            })
+            .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 200);
+            })
+            .catch(err => {
+                alert('Download error: ' + err.message);
+            })
+            .finally(() => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+            });
+    });
+
+    // ── Send email ──
     document.getElementById('btnSendEmail').addEventListener('click', function () {
         const form = document.getElementById('emailForm');
         if (!form.checkValidity()) {

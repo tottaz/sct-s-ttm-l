@@ -114,6 +114,146 @@
     </div>
 </div>
 
+<!-- Categories Management (separate card) -->
+<div class="row justify-content-center mt-4">
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Document Categories</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small">These categories appear in the upload form's Category dropdown. You can add, rename, or delete them.</p>
+
+                <ul class="list-group mb-3" id="categoryList">
+                    <li class="list-group-item text-muted text-center py-3">
+                        <span class="spinner-border spinner-border-sm me-2"></span>Loading…
+                    </li>
+                </ul>
+
+                <div class="input-group">
+                    <input type="text" id="newCategoryInput" class="form-control" placeholder="New category name…">
+                    <button class="btn btn-success" id="addCategoryBtn">Add</button>
+                </div>
+                <div id="categoryMsg" class="mt-2"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ── Categories management ──
+    const API_BASE = "{{ url_for('signature.categories_api') }}";
+
+    function showCategoryMsg(text, type = 'danger') {
+        const el = document.getElementById('categoryMsg');
+        el.innerHTML = `<div class="alert alert-${type} py-2 px-3 small">${text}</div>`;
+        setTimeout(() => el.innerHTML = '', 3000);
+    }
+
+    function renderCategories(cats) {
+        const ul = document.getElementById('categoryList');
+        if (!cats || cats.length === 0) {
+            ul.innerHTML = '<li class="list-group-item text-muted text-center">No categories yet.</li>';
+            return;
+        }
+        ul.innerHTML = cats.map(cat => `
+            <li class="list-group-item d-flex align-items-center gap-2" data-name="${cat}">
+                <span class="category-label flex-grow-1">${cat}</span>
+                <input type="text" class="form-control form-control-sm category-edit-input d-none flex-grow-1"
+                       value="${cat}">
+                <button class="btn btn-outline-secondary btn-sm edit-cat-btn" title="Rename">✏️</button>
+                <button class="btn btn-outline-success btn-sm save-cat-btn d-none" title="Save">✔</button>
+                <button class="btn btn-outline-danger btn-sm delete-cat-btn" title="Delete">🗑</button>
+            </li>`).join('');
+        attachCategoryHandlers();
+    }
+
+    function attachCategoryHandlers() {
+        // Edit / rename
+        document.querySelectorAll('.edit-cat-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const li = this.closest('li');
+                li.querySelector('.category-label').classList.add('d-none');
+                li.querySelector('.category-edit-input').classList.remove('d-none');
+                li.querySelector('.save-cat-btn').classList.remove('d-none');
+                this.classList.add('d-none');
+                li.querySelector('.category-edit-input').focus();
+            });
+        });
+
+        document.querySelectorAll('.save-cat-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const li = this.closest('li');
+                const oldName = li.dataset.name;
+                const newName = li.querySelector('.category-edit-input').value.trim();
+                if (!newName || newName === oldName) {
+                    loadCategories();
+                    return;
+                }
+                fetch(`${API_BASE}/${encodeURIComponent(oldName)}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: newName})
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) { showCategoryMsg(data.error); return; }
+                    renderCategories(data.categories);
+                    showCategoryMsg('Category renamed.', 'success');
+                });
+            });
+        });
+
+        // Delete
+        document.querySelectorAll('.delete-cat-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                const li = this.closest('li');
+                const name = li.dataset.name;
+                if (!confirm(`Delete category "${name}"?`)) return;
+                fetch(`${API_BASE}/${encodeURIComponent(name)}`, {method: 'DELETE'})
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) { showCategoryMsg(data.error); return; }
+                    renderCategories(data.categories);
+                    showCategoryMsg('Category deleted.', 'success');
+                });
+            });
+        });
+    }
+
+    function loadCategories() {
+        fetch(API_BASE)
+            .then(r => r.json())
+            .then(data => renderCategories(data.categories))
+            .catch(() => showCategoryMsg('Could not load categories.'));
+    }
+
+    // Add new category
+    document.getElementById('addCategoryBtn').addEventListener('click', function () {
+        const input = document.getElementById('newCategoryInput');
+        const name = input.value.trim();
+        if (!name) return;
+        fetch(API_BASE, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { showCategoryMsg(data.error); return; }
+            input.value = '';
+            renderCategories(data.categories);
+            showCategoryMsg(`"${name}" added.`, 'success');
+        });
+    });
+
+    document.getElementById('newCategoryInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('addCategoryBtn').click();
+    });
+
+    loadCategories();
+</script>
+
 <script>
     const useOpenAiSwitch = document.getElementById('use_openai');
     const openaiSettings = document.getElementById('openai_settings');
