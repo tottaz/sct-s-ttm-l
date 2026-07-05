@@ -121,23 +121,7 @@
         btn.disabled = true;
         spinner.classList.remove('d-none');
 
-        fetch(`/download/${docId}`)
-            .then(response => {
-                if (!response.ok) throw new Error('Download failed');
-                return response.blob();
-            })
-            .then(blob => {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(() => {
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                }, 200);
-            })
+        window.SattmalDownload.fetchAndSave(`/download/${docId}`, filename)
             .catch(err => {
                 alert('Download error: ' + err.message);
             })

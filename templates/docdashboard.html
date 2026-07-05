@@ -173,23 +173,7 @@
             btn.disabled = true;
             btn.textContent = 'Downloading...';
 
-            fetch(btn.dataset.url)
-                .then(response => {
-                    if (!response.ok) throw new Error('Download failed');
-                    return response.blob();
-                })
-                .then(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = btn.dataset.filename || 'document';
-                    document.body.appendChild(a);
-                    a.click();
-                    setTimeout(() => {
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(url);
-                    }, 200);
-                })
+            window.SattmalDownload.fetchAndSave(btn.dataset.url, btn.dataset.filename || 'document')
                 .catch(error => {
                     alert('Download error: ' + error.message);
                 })

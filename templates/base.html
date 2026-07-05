@@ -45,6 +45,57 @@
       navigator.serviceWorker.register("{{ url_for('static', filename='js/service-worker.js') }}")
         .then(() => console.log("Service Worker registered"));
     }
+
+    window.SattmalDownload = {
+      saveBlob: function (blob, filename) {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.save_file) {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const result = String(reader.result || '');
+              const base64Content = result.includes(',') ? result.split(',')[1] : result;
+              window.pywebview.api.save_file(filename || 'document', base64Content)
+                .then(response => {
+                  if (response && response.cancelled) {
+                    resolve(response);
+                    return;
+                  }
+                  if (!response || !response.success) {
+                    reject(new Error((response && response.error) || 'Download failed'));
+                    return;
+                  }
+                  resolve(response);
+                })
+                .catch(reject);
+            };
+            reader.onerror = () => reject(new Error('Could not prepare file download'));
+            reader.readAsDataURL(blob);
+          });
+        }
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'document';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 200);
+        return Promise.resolve({ success: true });
+      },
+
+      fetchAndSave: function (url, filename) {
+        return fetch(url)
+          .then(response => {
+            if (!response.ok) throw new Error('Download failed');
+            return response.blob();
+          })
+          .then(blob => window.SattmalDownload.saveBlob(blob, filename));
+      }
+    };
   </script>
 
   {% endblock %}
