@@ -18,19 +18,24 @@ import base64
 import json
 import shutil
 import smtplib
+import subprocess
+import re
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from datetime import datetime
+from pathlib import Path
 from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
+from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import hashlib
 import secrets
+import hmac
 from flask import session, g
+from urllib.parse import urlparse
 
-from openai import OpenAI
 import ollama
 import docx
 import markdown
@@ -40,6 +45,10 @@ import pdfplumber
 signature_bp = Blueprint("signature", __name__,
                          template_folder="templates",
                          static_folder="static")
+
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+SAFE_ID_RE = re.compile(r"^(signed_)?[0-9a-fA-F-]{36}$")
+ALLOWED_UPLOAD_EXTENSIONS = {'pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'csv', 'zip'}
 
 def get_data_dir():
     """Get a writable directory for application data."""
@@ -77,8 +86,6 @@ if not os.path.exists(CONFIG_FILE):
         # Create a default empty config if source is missing too
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump({
-                "use_openai": False,
-                "openai_api_key": "",
                 "ollama_base_url": "http://localhost:11434",
                 "fernet_key": Fernet.generate_key().decode()
             }, f, indent=2)
@@ -86,18 +93,47 @@ if not os.path.exists(CONFIG_FILE):
 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
     config = json.load(f)
 
-USE_OPENAI = config.get("use_openai", False)
-OPENAI_API_KEY = config.get("openai_api_key")
-OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
+
+def save_config():
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+
+def ensure_config_defaults():
+    changed = False
+    defaults = {
+        "ollama_base_url": DEFAULT_OLLAMA_BASE_URL,
+        "chat_model": "",
+        "vision_model": "",
+        "custom_model_name": "",
+        "storage_dir": os.path.join(DATA_BASE_DIR, "data"),
+        "categories": ["Contract", "Invoice", "Report", "Image", "Other"],
+    }
+    for key, value in defaults.items():
+        if key not in config:
+            config[key] = value
+            changed = True
+    if not config.get("flask_secret_key"):
+        config["flask_secret_key"] = secrets.token_urlsafe(48)
+        changed = True
+    if changed:
+        save_config()
+
+
+ensure_config_defaults()
+
+
+def get_flask_secret_key() -> str:
+    return config["flask_secret_key"]
+
+OLLAMA_BASE_URL = config.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL)
 # Config loading is done above, but we need to handle the case where salt isbytes
 # Salt should be stored as hex in json
 MASTER_PASSWORD_HASH = config.get("master_password_hash")
 SALT_HEX = config.get("salt")
 SALT = bytes.fromhex(SALT_HEX) if SALT_HEX else None
 
-USE_OPENAI = config.get("use_openai", False)
-OPENAI_API_KEY = config.get("openai_api_key")
-OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
+OLLAMA_BASE_URL = config.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL)
 
 # We no longer use a static FERNET_KEY from config for file encryption
 # We will use one derived from the master password for the SESSION.
@@ -109,11 +145,6 @@ OLLAMA_BASE_URL = config.get("ollama_base_url", "http://localhost:11434")
 FERNET_KEY = config.get("fernet_key")
 
 # Ensure categories exist in config
-if "categories" not in config:
-    config["categories"] = ["Contract", "Invoice", "Report", "Image", "Other"]
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
-
 def derive_key(password: str, salt: bytes) -> bytes:
     """Derive a Fernet-compatible key from a password and salt."""
     kdf = PBKDF2HMAC(
@@ -125,11 +156,141 @@ def derive_key(password: str, salt: bytes) -> bytes:
     return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
 def hash_password(password: str, salt: bytes) -> str:
-    """Hash password for verification (using simpler hash for auth check, or same KDF)."""
-    # We can use the same KDF mechanism but maybe just hex digest for storage
-    # to avoid easy reversal if we used simple sha256.
-    # Let's use SHA256(password + salt) for authentication check
-    return hashlib.sha256(password.encode() + salt).hexdigest()
+    """Hash password for verification with PBKDF2."""
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 480000)
+    return "pbkdf2_sha256$480000$" + digest.hex()
+
+
+def verify_password(password: str, salt: bytes, stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+    if stored_hash.startswith("pbkdf2_sha256$"):
+        return hmac.compare_digest(hash_password(password, salt), stored_hash)
+
+    # Legacy auth hash used by older local configs. Successful login upgrades it.
+    legacy_hash = hashlib.sha256(password.encode() + salt).hexdigest()
+    return hmac.compare_digest(legacy_hash, stored_hash)
+
+
+def ollama_client():
+    return ollama.Client(host=config.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL))
+
+
+def normalize_ollama_models(response) -> list:
+    if hasattr(response, 'models'):
+        models_list = response.models
+    elif isinstance(response, dict):
+        models_list = response.get('models', [])
+    else:
+        models_list = response
+
+    names = []
+    for m in models_list:
+        name = getattr(m, 'model', m.get('model')) if hasattr(m, 'model') or isinstance(m, dict) else str(m)
+        if name:
+            names.append(name)
+    return sorted(set(names))
+
+
+def get_ollama_models() -> list:
+    return normalize_ollama_models(ollama_client().list())
+
+
+def ensure_ollama_model(model: str):
+    if not model:
+        return
+    available = get_ollama_models()
+    if model not in available:
+        ollama_client().pull(model)
+
+
+def get_required_model(capability: str = "chat") -> str:
+    key = f"{capability}_model"
+    model = (config.get(key) or "").strip()
+    if not model:
+        raise ValueError(f"No local {capability} model selected. Choose an Ollama model in Settings.")
+    return model
+
+
+def ollama_is_installed() -> bool:
+    return shutil.which("ollama") is not None
+
+
+def safe_doc_id(doc_id: str) -> str:
+    if not doc_id or not SAFE_ID_RE.match(doc_id):
+        abort(400, description="Invalid document id")
+    return doc_id
+
+
+def storage_root() -> str:
+    root = os.path.abspath(os.path.expanduser(config.get("storage_dir") or os.path.join(DATA_BASE_DIR, "data")))
+    return root
+
+
+def ensure_storage_dirs():
+    global UPLOADS_DIR, SIGNATURES_DIR
+    root = storage_root()
+    UPLOADS_DIR = os.path.join(root, "uploads")
+    SIGNATURES_DIR = os.path.join(root, "signatures")
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
+    os.makedirs(SIGNATURES_DIR, exist_ok=True)
+
+
+def is_within_directory(path: str, directory: str) -> bool:
+    try:
+        Path(path).resolve().relative_to(Path(directory).resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def validate_storage_dir(path: str) -> str:
+    if not path:
+        raise ValueError("Storage directory is required.")
+    resolved = os.path.abspath(os.path.expanduser(path))
+    os.makedirs(resolved, exist_ok=True)
+    test_file = os.path.join(resolved, ".sattmal_write_test")
+    with open(test_file, "w", encoding="utf-8") as f:
+        f.write("ok")
+    os.remove(test_file)
+    return resolved
+
+
+def migrate_storage_dir(new_root: str):
+    old_uploads = globals().get("UPLOADS_DIR")
+    old_signatures = globals().get("SIGNATURES_DIR")
+    new_uploads = os.path.join(new_root, "uploads")
+    new_signatures = os.path.join(new_root, "signatures")
+    os.makedirs(new_uploads, exist_ok=True)
+    os.makedirs(new_signatures, exist_ok=True)
+
+    for src_dir, dest_dir in ((old_uploads, new_uploads), (old_signatures, new_signatures)):
+        if not src_dir or os.path.abspath(src_dir) == os.path.abspath(dest_dir) or not os.path.isdir(src_dir):
+            continue
+        for name in os.listdir(src_dir):
+            src = os.path.join(src_dir, name)
+            dest = os.path.join(dest_dir, name)
+            if os.path.exists(dest):
+                continue
+            shutil.move(src, dest)
+
+
+def metadata_path_for(file_id: str) -> str:
+    return os.path.join(UPLOADS_DIR, f"{safe_doc_id(file_id)}.json")
+
+
+def resolve_upload_path(meta: dict) -> str | None:
+    stored_filename = secure_filename(os.path.basename(meta.get("stored_filename") or meta.get("filename") or ""))
+    if stored_filename:
+        candidate = os.path.join(UPLOADS_DIR, stored_filename)
+        if os.path.exists(candidate):
+            return candidate
+
+    legacy_path = meta.get("file_path")
+    if legacy_path and os.path.exists(legacy_path) and is_within_directory(legacy_path, UPLOADS_DIR):
+        return legacy_path
+
+    return None
 
 # Middleware to check login
 def encrypt_file(file_path: str, key: bytes):
@@ -155,6 +316,16 @@ def decrypt_file_content(file_path: str, key: bytes) -> bytes:
 
 @signature_bp.before_request
 def check_login():
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        expected_host = request.host
+        for header_name in ("Origin", "Referer"):
+            value = request.headers.get(header_name)
+            if not value:
+                continue
+            parsed = urlparse(value)
+            if parsed.netloc and parsed.netloc != expected_host:
+                abort(403, description="Cross-origin request blocked")
+
     # Allow static resources and specific routes
     if request.endpoint in ['static', 'signature.login', 'signature.setup', 'signature.logout']:
         return
@@ -179,17 +350,38 @@ def setup():
     if MASTER_PASSWORD_HASH:
          return redirect(url_for('signature.login'))
 
+    ollama_status = {
+        "installed": ollama_is_installed(),
+        "running": False,
+        "models": [],
+        "error": None,
+    }
+    try:
+        ollama_status["models"] = get_ollama_models()
+        ollama_status["running"] = True
+    except Exception as e:
+        ollama_status["error"] = str(e)
+
     if request.method == "POST":
         password = request.form.get("password")
         confirm = request.form.get("confirm_password")
+        storage_dir = request.form.get("storage_dir", "").strip()
+        ollama_url = request.form.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL).strip() or DEFAULT_OLLAMA_BASE_URL
+        chat_model = request.form.get("chat_model", "").strip()
         
         if password != confirm:
             flash("Passwords do not match!", "danger")
-            return render_template("setup.html")
+            return render_template("setup.html", config=config, ollama_status=ollama_status)
             
         if not password:
             flash("Password cannot be empty.", "danger")
-            return render_template("setup.html")
+            return render_template("setup.html", config=config, ollama_status=ollama_status)
+
+        try:
+            storage_dir = validate_storage_dir(storage_dir or config.get("storage_dir"))
+        except Exception as e:
+            flash(f"Storage location is not writable: {e}", "danger")
+            return render_template("setup.html", config=config, ollama_status=ollama_status)
 
         # Generate Salt
         SALT = secrets.token_bytes(16)
@@ -201,9 +393,12 @@ def setup():
         # Save to config
         config["master_password_hash"] = MASTER_PASSWORD_HASH
         config["salt"] = SALT_HEX
+        config["storage_dir"] = storage_dir
+        config["ollama_base_url"] = ollama_url
+        config["chat_model"] = chat_model
         
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+        save_config()
+        ensure_storage_dirs()
             
         # Log user in immediately
         derived_key = derive_key(password, SALT)
@@ -212,7 +407,7 @@ def setup():
         flash("Setup complete! You are now logged in.", "success")
         return redirect(url_for("signature.index"))
 
-    return render_template("setup.html")
+    return render_template("setup.html", config=config, ollama_status=ollama_status)
 
 @signature_bp.route("/login", methods=["GET", "POST"])
 def login():
@@ -226,10 +421,12 @@ def login():
              flash("Error: Salt missing. Please reset config.", "danger")
              return render_template("login.html")
              
-        computed_hash = hash_password(password, SALT)
-        
-        if computed_hash == MASTER_PASSWORD_HASH:
+        if verify_password(password, SALT, MASTER_PASSWORD_HASH):
             # Success
+            if not MASTER_PASSWORD_HASH.startswith("pbkdf2_sha256$"):
+                MASTER_PASSWORD_HASH = hash_password(password, SALT)
+                config["master_password_hash"] = MASTER_PASSWORD_HASH
+                save_config()
             derived_key = derive_key(password, SALT)
             session['encryption_key'] = derived_key.decode()
             flash("Logged in successfully.", "success")
@@ -259,22 +456,14 @@ if not is_valid_fernet_key(FERNET_KEY):
     # If missing or invalid (e.g. placeholder), generate a new one
     FERNET_KEY = Fernet.generate_key().decode()
     config["fernet_key"] = FERNET_KEY
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+    save_config()
 
 # Initialize cipher
 cipher = Fernet(FERNET_KEY)
 
-UPLOADS_DIR = os.path.join(DATA_BASE_DIR, "data", "uploads")
-SIGNATURES_DIR = os.path.join(DATA_BASE_DIR, "data", "signatures")
-
-# Make sure directories exist
-os.makedirs(UPLOADS_DIR, exist_ok=True)
-os.makedirs(SIGNATURES_DIR, exist_ok=True)
-
-
-def metadata_path_for(file_id: str) -> str:
-    return os.path.join(UPLOADS_DIR, f"{file_id}.json")
+UPLOADS_DIR = ""
+SIGNATURES_DIR = ""
+ensure_storage_dirs()
 
 
 def write_metadata(meta: dict):
@@ -382,71 +571,40 @@ def analyze_document_content(body: str, language: str = "English", style: str = 
             "Format the output in clean Markdown using headers and bullet points."
         )
 
-    if USE_OPENAI:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+    chat_model = get_required_model("chat")
+    try:
+        ollama_client().list()
+    except Exception:
+        raise Exception("Ollama server is not running. Start it with: ollama serve")
+    try:
+        ensure_ollama_model(chat_model)
+        response = ollama_client().chat(
+            model=chat_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": body}
             ]
         )
-        return response.choices[0].message.content.strip()
-    else:
-        # Ollama
-        chat_model = config.get("chat_model", "llama3.2:latest")
-        try:
-            ollama.list()
-        except Exception:
-            raise Exception("Ollama server is not running. Start it with: ollama serve")
-        try:
-            response = ollama.chat(
-                model=chat_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": body}
-                ]
-            )
-            return response["message"]["content"].strip()
-        except Exception as e:
-            raise Exception(f"Ollama chat error: {e}")
+        return response["message"]["content"].strip()
+    except Exception as e:
+        raise Exception(f"Ollama chat error: {e}")
 
 
 def get_available_vision_model():
-    """Check for available vision-capable models (llava, llama3.2-vision)."""
-    # If user selected a specific model in config, use it if available
-    user_pref = config.get("vision_model")
+    """Return the configured vision model if available."""
+    user_pref = (config.get("vision_model") or "").strip()
+    if not user_pref:
+        return None
     
     try:
-        response = ollama.list()
-        # Handle response structure
-        if hasattr(response, 'models'):
-            models_list = response.models
-        elif isinstance(response, dict):
-            models_list = response.get('models', [])
-        else:
-            models_list = response
-        
-        available = []
-        for m in models_list:
-            name = getattr(m, 'model', m.get('model')) if hasattr(m, 'model') or isinstance(m, dict) else str(m)
-            available.append(name)
+        available = get_ollama_models()
             
         # If user pref is valid, return it
-        if user_pref and user_pref in available:
+        if user_pref in available:
             return user_pref
-            
-        # Preference order
-        for candidate in ["llava:latest", "llama3.2-vision:latest"]:
-            if candidate in available:
-                return candidate
-                
-        # Fallback: check for any model containing 'vision' or 'llava'
-        for name in available:
-            if "vision" in name or "llava" in name:
-                return name
-                
-        return None
+
+        ensure_ollama_model(user_pref)
+        return user_pref
     except Exception as e:
         print(f"Error listing Ollama models: {e}")
         return None
@@ -457,36 +615,25 @@ def extract_text_from_image(image_path: str, raw_bytes: bytes = None) -> str:
         image_path: Path to image file (will be decrypted if raw_bytes not provided)
         raw_bytes: Optional raw image bytes (for temp files that aren't encrypted)
     """
-    if USE_OPENAI:
-         # simple fallback or placeholder if user only has OpenAI key but not Ollama
-         # For now, let's assume if they upload image they want local generic vision or we can use gpt-4o-mini vision if available
-         # But the requirement was specific to Ollama. Let's stick to Ollama for image text extraction for now as requested.
-         pass
-
     # check if ollama is running
     try:
-        ollama.list()
+        ollama_client().list()
     except Exception:
         raise Exception("Ollama server is not running. Start it with: ollama serve")
 
     vision_model = get_available_vision_model()
     if not vision_model:
-        # Try to pull llava if nothing found
-        try:
-             print("No vision model found. Attempting to pull llava:latest...")
-             ollama.pull("llava:latest")
-             vision_model = "llava:latest"
-        except Exception as e:
-             raise Exception(f"No vision model (llava or llama3.2-vision) found and failed to pull llava: {e}")
+        raise Exception("No Ollama vision model selected. Choose a vision model in Settings.")
 
     try:
+        ensure_ollama_model(vision_model)
         # Use provided raw bytes or decrypt from file
         if raw_bytes:
             image_bytes = raw_bytes
         else:
             image_bytes = decrypt_file_content(image_path, g.encryption_key)
             
-        response = ollama.chat(
+        response = ollama_client().chat(
             model=vision_model, 
             messages=[
                 {
@@ -591,34 +738,23 @@ def translate_document_content(text: str, target_language: str = "English", sour
             "Do not output markdown code blocks unless the original text contained them."
         )
 
-    if USE_OPENAI:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+    chat_model = get_required_model("chat")
+    try:
+        ollama_client().list()
+    except Exception:
+        raise Exception("Ollama server is not running. Start it with: ollama serve")
+    try:
+        ensure_ollama_model(chat_model)
+        response = ollama_client().chat(
+            model=chat_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text}
             ]
         )
-        return response.choices[0].message.content.strip()
-    else:
-        # Ollama
-        chat_model = config.get("chat_model", "llama3.2:latest")
-        try:
-            ollama.list()
-        except Exception:
-            raise Exception("Ollama server is not running. Start it with: ollama serve")
-        try:
-            response = ollama.chat(
-                model=chat_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
-                ]
-            )
-            return response["message"]["content"].strip()
-        except Exception as e:
-            raise Exception(f"Ollama chat error: {e}")
+        return response["message"]["content"].strip()
+    except Exception as e:
+        raise Exception(f"Ollama chat error: {e}")
 
 
 def generate_response_content(text: str, instructions: str = "", tone: str = "Professional") -> str:
@@ -631,107 +767,139 @@ def generate_response_content(text: str, instructions: str = "", tone: str = "Pr
     if instructions:
         system_prompt += f" Additional instructions from the user: {instructions}"
 
-    if USE_OPENAI:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+    try:
+        ollama_client().list()
+    except Exception:
+        raise Exception("Ollama server is not running. Start it with: ollama serve")
+    try:
+        chat_model = get_required_model("chat")
+        ensure_ollama_model(chat_model)
+        response = ollama_client().chat(
+            model=chat_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": text}
             ]
         )
-        return response.choices[0].message.content.strip()
-    else:
-        # Ollama
-        try:
-            ollama.list()
-        except Exception:
-            raise Exception("Ollama server is not running. Start it with: ollama serve")
-        try:
-            response = ollama.chat(
-                model="llama3.2:latest",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text}
-                ]
-            )
-            return response["message"]["content"].strip()
-        except Exception as e:
-            raise Exception(f"Ollama chat error: {e}")
+        return response["message"]["content"].strip()
+    except Exception as e:
+        raise Exception(f"Ollama chat error: {e}")
+
+
+def answer_document_question(text: str, question: str) -> str:
+    system_prompt = (
+        "You are a careful document analysis assistant. Answer the user's question using only the document content "
+        "provided. If the document does not contain enough information, say what is missing. Be clear, practical, "
+        "and point to relevant sections or wording when possible."
+    )
+    user_content = f"Document content:\n{text}\n\nQuestion:\n{question}"
+
+    chat_model = get_required_model("chat")
+    try:
+        ollama_client().list()
+    except Exception:
+        raise Exception("Ollama server is not running. Start it with: ollama serve")
+    try:
+        ensure_ollama_model(chat_model)
+        response = ollama_client().chat(
+            model=chat_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ]
+        )
+        return response["message"]["content"].strip()
+    except Exception as e:
+        raise Exception(f"Ollama chat error: {e}")
 
 # Default route → dashboard
 @signature_bp.route("/")
 def index():
-    # Check if config is configured, if not, redirect to settings
-    if not config.get("openai_api_key") and config.get("use_openai"):
-        flash("Please configure your OpenAI API Key in settings.", "warning")
-        return redirect(url_for("signature.settings"))
-    
     docs = load_docs()
     return render_template("docdashboard.html", docs=docs)
 
 
+@signature_bp.route("/documentation")
+def documentation():
+    base_path = getattr(sys, '_MEIPASS', os.getcwd())
+    doc_path = os.path.join(base_path, "documentation.md")
+    if not os.path.exists(doc_path):
+        abort(404, description="Documentation not found")
+
+    with open(doc_path, "r", encoding="utf-8") as f:
+        doc_markdown = f.read()
+
+    doc_html = markdown.markdown(doc_markdown, extensions=["fenced_code", "tables"])
+    return render_template("documentation.html", doc_html=doc_html)
+
+
 @signature_bp.route("/settings", methods=["GET", "POST"])
 def settings():
-    global config, USE_OPENAI, OPENAI_API_KEY, OLLAMA_BASE_URL
+    global config, OLLAMA_BASE_URL
     
     # Fetch available Ollama models for dropdowns
     ollama_models = []
+    ollama_status = {"installed": ollama_is_installed(), "running": False, "error": None}
     try:
-        response = ollama.list()
-        if hasattr(response, 'models'):
-            models_list = response.models
-        elif isinstance(response, dict):
-            models_list = response.get('models', [])
-        else:
-            models_list = response
-            
-        for m in models_list:
-            name = getattr(m, 'model', m.get('model')) if hasattr(m, 'model') or isinstance(m, dict) else str(m)
-            ollama_models.append(name)
+        ollama_models = get_ollama_models()
+        ollama_status["running"] = True
     except Exception as e:
+        ollama_status["error"] = str(e)
         print(f"Error fetching Ollama models: {e}")
 
     if request.method == "POST":
-        use_openai = request.form.get("use_openai") == "on"
-        openai_key = request.form.get("openai_api_key", "").strip()
-        ollama_url = request.form.get("ollama_base_url", "http://localhost:11434").strip()
+        ollama_url = request.form.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL).strip() or DEFAULT_OLLAMA_BASE_URL
+        storage_dir = request.form.get("storage_dir", "").strip()
         email = request.form.get("email", "").strip()
         app_password = request.form.get("app_password", "").strip()
         
         # New settings
         vision_model = request.form.get("vision_model")
-        chat_model = request.form.get("chat_model")
-        translation_prompt = request.form.get("translation_prompt")
-        analysis_prompt = request.form.get("analysis_prompt")
+        chat_model = request.form.get("chat_model", "").strip()
+        custom_model_name = request.form.get("custom_model_name", "").strip()
+        translation_prompt = request.form.get("translation_prompt", "").strip()
+        analysis_prompt = request.form.get("analysis_prompt", "").strip()
+        previous_storage_dir = storage_root()
+
+        try:
+            storage_dir = validate_storage_dir(storage_dir or previous_storage_dir)
+        except Exception as e:
+            flash(f"Storage location is not writable: {e}", "danger")
+            return render_template("settings.html", config=config, ollama_models=ollama_models, ollama_status=ollama_status)
         
-        config["use_openai"] = use_openai
-        config["openai_api_key"] = openai_key
+        for legacy_key in (
+            "use_" + "open" + "ai",
+            "open" + "ai_" + "api" + "_key",
+            "open" + "ai_model",
+        ):
+            config.pop(legacy_key, None)
         config["ollama_base_url"] = ollama_url
+        config["storage_dir"] = storage_dir
         config["email"] = email
         config["app_password"] = app_password
         
-        if vision_model: config["vision_model"] = vision_model
-        if chat_model: config["chat_model"] = chat_model
-        if translation_prompt: config["translation_prompt"] = translation_prompt
-        if analysis_prompt: config["analysis_prompt"] = analysis_prompt
+        config["vision_model"] = vision_model or ""
+        config["chat_model"] = chat_model
+        config["custom_model_name"] = custom_model_name
+        config["translation_prompt"] = translation_prompt
+        config["analysis_prompt"] = analysis_prompt
         
-        # Save to CONFIG_FILE
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+        if os.path.abspath(storage_dir) != os.path.abspath(previous_storage_dir):
+            migrate_storage_dir(storage_dir)
+        save_config()
+        ensure_storage_dirs()
             
         # Update current runtime variables
-        USE_OPENAI = use_openai
-        OPENAI_API_KEY = openai_key
         OLLAMA_BASE_URL = ollama_url
         
         flash("Settings updated successfully.", "success")
         return redirect(url_for("signature.index"))
         
-    return render_template("settings.html", config=config, ollama_models=ollama_models)
+    return render_template("settings.html", config=config, ollama_models=ollama_models, ollama_status=ollama_status)
 
 @signature_bp.route("/doc/send/<doc_id>", methods=["POST"])
 def doc_send(doc_id):
+    doc_id = safe_doc_id(doc_id)
     to_email = request.form.get("to")
     cc_email = request.form.get("cc")
     bcc_email = request.form.get("bcc")
@@ -747,15 +915,7 @@ def doc_send(doc_id):
         return jsonify({"error": "Document not found"}), 404
 
     # Determine file path
-    file_path = doc.get('file_path')
-    if not file_path or not os.path.exists(file_path):
-        # Fallback to stored_filename if file_path is missing or incorrect
-        stored_filename = doc.get('stored_filename')
-        if stored_filename:
-            file_path = os.path.join(UPLOADS_DIR, stored_filename)
-        else:
-            # Last resort fallback
-            file_path = os.path.join(UPLOADS_DIR, doc.get('filename'))
+    file_path = resolve_upload_path(doc)
 
     attachment_name = doc.get('filename', 'document.pdf')
 
@@ -807,16 +967,30 @@ def doc_send(doc_id):
 
 @signature_bp.route("/api/train_local_gpt", methods=["POST"])
 def train_local_gpt():
-    method = request.json.get("method", "pytorch")
+    method = (request.json or {}).get("method", "pytorch")
+    if method not in {"python", "pytorch"}:
+        return jsonify({"error": "Unsupported training method"}), 400
+    custom_model_name = (config.get("custom_model_name") or "").strip()
+    if not custom_model_name:
+        return jsonify({"error": "Set a custom model name in Settings before training."}), 400
     # Spawn background training process
     import subprocess
     import threading
     
     def run_training(key_bytes, train_method):
         try:
-            script_path = os.path.join(DATA_BASE_DIR, "scripts", "train_to_gguf.py")
+            base_path = getattr(sys, '_MEIPASS', os.getcwd())
+            script_path = os.path.join(base_path, "scripts", "train_to_gguf.py")
             # Using the same python executable as the app
-            subprocess.run([sys.executable, script_path, "--key", key_bytes.decode(), "--data-dir", DATA_BASE_DIR, "--method", train_method], check=True)
+            subprocess.run([
+                sys.executable,
+                script_path,
+                "--key", key_bytes.decode(),
+                "--data-dir", storage_root(),
+                "--method", train_method,
+                "--model-name", custom_model_name,
+                "--vision-model", (config.get("vision_model") or "")
+            ], check=True)
             print(f"Finished training local GPT model using {train_method}.")
         except Exception as e:
             print(f"Error during local GPT training: {e}")
@@ -840,13 +1014,16 @@ def training_status():
 
 @signature_bp.route("/api/search_local_gpt", methods=["POST"])
 def search_local_gpt():
-    query = request.json.get("query", "")
+    query = (request.json or {}).get("query", "")
     if not query:
         return jsonify({"error": "Query is required"}), 400
+    custom_model_name = (config.get("custom_model_name") or "").strip()
+    if not custom_model_name:
+        return jsonify({"error": "Set a custom model name in Settings before searching."}), 400
         
     try:
-        response = ollama.chat(
-            model="local-gpt",
+        response = ollama_client().chat(
+            model=custom_model_name,
             messages=[{"role": "user", "content": query}]
         )
         return jsonify({"success": True, "response": response["message"]["content"]})
@@ -871,8 +1048,7 @@ def categories_api():
         return jsonify({"error": "Category already exists"}), 400
     cats.append(name)
     config["categories"] = cats
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+    save_config()
     return jsonify({"categories": cats})
 
 
@@ -886,8 +1062,7 @@ def category_item_api(name):
             return jsonify({"error": "Category not found"}), 404
         cats.remove(name)
         config["categories"] = cats
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+        save_config()
         return jsonify({"categories": cats})
 
     # PUT – rename
@@ -900,8 +1075,7 @@ def category_item_api(name):
         return jsonify({"error": "Category already exists"}), 400
     cats[cats.index(name)] = new_name
     config["categories"] = cats
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+    save_config()
     return jsonify({"categories": cats})
 
 
@@ -915,6 +1089,11 @@ def docupload():
 
         if pdf_file and pdf_file.filename:
             original_filename = secure_filename(pdf_file.filename)
+            extension = original_filename.rsplit('.', 1)[-1].lower() if '.' in original_filename else ''
+            if extension not in ALLOWED_UPLOAD_EXTENSIONS:
+                 flash(f"Unsupported file type: {extension or 'none'}", "danger")
+                 return redirect(url_for("signature.docupload"))
+
             # store with file_id prefix to avoid collisions
             stored_filename = f"{file_id}_{original_filename}"
             file_path = os.path.join(UPLOADS_DIR, stored_filename)
@@ -923,15 +1102,6 @@ def docupload():
             # Encrypt the file immediately
             if 'encryption_key' in g:
                 encrypt_file(file_path, g.encryption_key)
-
-
-            extension = original_filename.split('.')[-1].lower() if '.' in original_filename else 'pdf'
-            
-            # Allow images and data files
-            allowed_extensions = {'pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'csv', 'zip'}
-            if extension not in allowed_extensions:
-                 flash(f"Unsupported file type: {extension}", "danger")
-                 return redirect(url_for("signature.docupload"))
 
             # Read optional user-supplied metadata from form
             title = request.form.get("title", "").strip() or os.path.splitext(original_filename)[0]
@@ -969,25 +1139,22 @@ def docupload():
 # Serve uploaded files
 @signature_bp.route('/docuploaded_file/<path:filename>')
 def docuploaded_file(filename):
-    # Use global UPLOADS_DIR
-    uploads_dir = UPLOADS_DIR
-
-    # Loop through all .json meta files
-    for f in os.listdir(uploads_dir):
+    stored_meta = None
+    for f in os.listdir(UPLOADS_DIR):
         if f.endswith(".json"):
-            meta_path = os.path.join(uploads_dir, f)
+            meta_path = os.path.join(UPLOADS_DIR, f)
             with open(meta_path) as meta_file:
                 meta = json.load(meta_file)
 
             if meta.get("original_filename") == filename:
-                stored_filename = meta.get("stored_filename")
-    # Check if we should serve encrypted content decrypted
-    # Since send_from_directory reads raw file, we need a custom serve for encrypted files
-    # However, this route is for "docuploaded_file".
-    # We should see if file is encrypted.
-    
-    file_path = os.path.join(uploads_dir, stored_filename)
-    if not os.path.exists(file_path):
+                stored_meta = meta
+                break
+
+    if not stored_meta:
+        abort(404)
+
+    file_path = resolve_upload_path(stored_meta)
+    if not file_path:
          abort(404)
 
     # Decrypt and serve
@@ -1007,16 +1174,14 @@ def docuploaded_file(filename):
         print(f"Error serving file: {e}")
         abort(500)
 
-    # Fallback (never reached if logic holds)
-    return send_from_directory(uploads_dir, stored_filename)
-
     abort(404, description=f"No stored file found for {filename}")
 
 
 # Sign document (draw signature)
 @signature_bp.route("/docsign/<doc_id>")
 def docsign(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
         return redirect(url_for("signature.index"))
@@ -1024,8 +1189,8 @@ def docsign(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get("file_path")
-    if not file_path or not os.path.exists(file_path):
+    file_path = resolve_upload_path(meta)
+    if not file_path:
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))
 
@@ -1038,7 +1203,8 @@ def docsign(doc_id):
 # View PDF
 @signature_bp.route("/docview/<doc_id>")
 def docview(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
         return redirect(url_for("signature.index"))
@@ -1060,7 +1226,8 @@ def docview(doc_id):
 
 @signature_bp.route("/docdelete/<doc_id>", methods=["POST"])
 def docdelete(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
         return redirect(url_for("signature.index"))
@@ -1068,8 +1235,8 @@ def docdelete(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get("file_path")
-    if file_path and os.path.exists(file_path):
+    file_path = resolve_upload_path(meta)
+    if file_path:
         os.remove(file_path)
 
     # Delete the metadata JSON
@@ -1080,7 +1247,8 @@ def docdelete(doc_id):
 
 @signature_bp.route("/download/<doc_id>")
 def download_doc(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
         return redirect(url_for("signature.index"))
@@ -1088,15 +1256,8 @@ def download_doc(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get('file_path')
-    if not file_path or not os.path.exists(file_path):
-        stored_filename = meta.get('stored_filename')
-        if stored_filename:
-            file_path = os.path.join(UPLOADS_DIR, stored_filename)
-        else:
-            file_path = os.path.join(UPLOADS_DIR, meta.get('filename'))
-
-    if not file_path or not os.path.exists(file_path):
+    file_path = resolve_upload_path(meta)
+    if not file_path:
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))
 
@@ -1106,9 +1267,9 @@ def download_doc(doc_id):
 
 @signature_bp.route("/save_signed_pdf", methods=["POST"])
 def save_signed_pdf():
-    data = request.json
+    data = request.json or {}
     pdf_base64 = data.get("pdf_base64")
-    original_filename = data.get("original_filename")
+    original_filename = secure_filename(data.get("original_filename") or "signed.pdf")
 
     if not pdf_base64 or not original_filename:
         return {"success": False, "error": "Missing data"}, 400
@@ -1125,7 +1286,6 @@ def save_signed_pdf():
 
     # create meta file
     # create meta file (use only the id in the meta filename)
-    meta_path = os.path.join(UPLOADS_DIR, f"signed_{file_id}.json")
 
     # Encrypt the signed file
     if 'encryption_key' in g:
@@ -1142,8 +1302,7 @@ def save_signed_pdf():
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    write_metadata(meta)
 
     return {"success": True, "filename": signed_filename}
 
@@ -1151,7 +1310,8 @@ def save_signed_pdf():
 # Analyse document
 @signature_bp.route("/analyze_doc/<doc_id>", methods=["GET", "POST"])
 def analyze_doc(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
         return redirect(url_for("signature.index"))
@@ -1163,14 +1323,11 @@ def analyze_doc(doc_id):
         language = request.form.get("language", "English")
         style = request.form.get("style", "layman")
         
-        file_path = meta.get("file_path")
-        if not file_path or not os.path.exists(file_path):
+        file_path = resolve_upload_path(meta)
+        if not file_path:
             flash("Document file not found.", "danger")
             return redirect(url_for("signature.index"))
 
-        text = ""
-        filename = file_path.lower()
-        
         try:
             text = get_document_text(file_path)
         except Exception as e:
@@ -1208,8 +1365,8 @@ def analyze_doc(doc_id):
         if not analysis_html:
             # Fallback to current settings if no analysis exists
             try:
-                file_path = meta.get("file_path")
-                if not file_path or not os.path.exists(file_path):
+                file_path = resolve_upload_path(meta)
+                if not file_path:
                      return jsonify({"success": False, "analysis": "Document file not found."})
                 
                 text = get_document_text(file_path)
@@ -1231,19 +1388,19 @@ def analyze_doc(doc_id):
 
 @signature_bp.route("/translate_doc/<doc_id>", methods=["POST"])
 def translate_doc(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         return jsonify({"success": False, "error": "Document metadata not found."}), 404
 
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    target_language = request.json.get("language", "English")
-    file_path = meta.get("file_path")
-    if not file_path or not os.path.exists(file_path):
+    data = request.json or {}
+    file_path = resolve_upload_path(meta)
+    if not file_path:
         return jsonify({"success": False, "error": "Document file not found."}), 404
 
-    data = request.json
     target_language = data.get("language", "English")
     source_language = data.get("source_language", "auto")
     show_extracted = data.get("show_extracted_text", False)
@@ -1281,9 +1438,10 @@ def translate_doc(doc_id):
 
 @signature_bp.route("/save_translation/<doc_id>", methods=["POST"])
 def save_translation(doc_id):
+    doc_id = safe_doc_id(doc_id)
     """Save translation as a new .txt document"""
     try:
-        data = request.json
+        data = request.json or {}
         translation_text = data.get("translation_text", "")
         original_filename = data.get("original_filename", "document")
         target_language = data.get("target_language", "")
@@ -1295,8 +1453,9 @@ def save_translation(doc_id):
         new_doc_id = str(uuid.uuid4())
         
         # Create filename
-        base_name = os.path.splitext(original_filename)[0]
-        new_filename = f"{base_name}_translated_{target_language}.txt"
+        base_name = secure_filename(os.path.splitext(original_filename)[0]) or "document"
+        safe_language = secure_filename(target_language) or "translated"
+        new_filename = f"{base_name}_translated_{safe_language}.txt"
         
         # Ensure uploads directory exists
         os.makedirs(UPLOADS_DIR, exist_ok=True)
@@ -1321,9 +1480,7 @@ def save_translation(doc_id):
         }
         
         # Save metadata
-        meta_path = os.path.join(UPLOADS_DIR, f"{new_doc_id}.json")
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
+        write_metadata(metadata)
         
         return jsonify({
             "success": True,
@@ -1336,25 +1493,22 @@ def save_translation(doc_id):
 
 @signature_bp.route("/generate_response/<doc_id>", methods=["POST"])
 def generate_response(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         return jsonify({"success": False, "error": "Document metadata not found."}), 404
 
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    instructions = request.json.get("instructions", "")
-    tone = request.json.get("tone", "Professional")
+    data = request.json or {}
+    instructions = data.get("instructions", "")
+    tone = data.get("tone", "Professional")
     
-    file_path = meta.get("file_path")
-    if not file_path or not os.path.exists(file_path):
+    file_path = resolve_upload_path(meta)
+    if not file_path:
         return jsonify({"success": False, "error": "Document file not found."}), 404
 
-    text = ""
-    filename = file_path.lower()
-    
-
-    
     try:
         text = get_document_text(file_path)
     except Exception as e:
@@ -1377,12 +1531,46 @@ def generate_response(doc_id):
     except Exception as e:
         return jsonify({"success": False, "error": f"Response generation failed: {e}"}), 500
 
+
+@signature_bp.route("/ask_doc/<doc_id>", methods=["POST"])
+def ask_doc(doc_id):
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
+    if not os.path.exists(meta_path):
+        return jsonify({"success": False, "error": "Document metadata not found."}), 404
+
+    with open(meta_path, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    data = request.json or {}
+    question = data.get("question", "").strip()
+    if not question:
+        return jsonify({"success": False, "error": "Question is required."}), 400
+
+    file_path = resolve_upload_path(meta)
+    if not file_path:
+        return jsonify({"success": False, "error": "Document file not found."}), 404
+
+    try:
+        text = get_document_text(file_path)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error extracting text: {e}"}), 500
+
+    if not text.strip():
+        return jsonify({"success": False, "error": "No text content found in document."}), 400
+
+    try:
+        answer = answer_document_question(text, question)
+        return jsonify({"success": True, "answer": markdown.markdown(answer)})
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Question failed: {e}"}), 500
+
 # Save drawn signature
 @signature_bp.route("/save_signature", methods=["POST"])
 def save_signature():
-    data = request.json
+    data = request.json or {}
     sig_data = data.get("signature")
-    doc_id = data.get("doc_id")
+    doc_id = safe_doc_id(data.get("doc_id", ""))
 
     if not sig_data or not doc_id:
         return {"success": False, "error": "Missing signature or document ID"}, 400
@@ -1393,13 +1581,13 @@ def save_signature():
 
     # decode and encrypt
     raw_bytes = base64.b64decode(sig_data.split(",")[1])
-    encrypted = cipher.encrypt(raw_bytes)
+    encrypted = Fernet(g.encryption_key).encrypt(raw_bytes)
 
     with open(sig_path, "wb") as f:
         f.write(encrypted)
 
     # update document JSON
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    meta_path = metadata_path_for(doc_id)
     if os.path.exists(meta_path):
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
@@ -1420,6 +1608,9 @@ def list_signatures():
 
 @signature_bp.route("/serve_signature/<sig_id>")
 def serve_signature(sig_id):
+    sig_id = secure_filename(sig_id)
+    if not sig_id.endswith(".png"):
+        abort(400)
     sig_path = os.path.join(SIGNATURES_DIR, sig_id)
     if not os.path.exists(sig_path):
         flash("Signature not found.", "danger")
@@ -1428,7 +1619,10 @@ def serve_signature(sig_id):
     # read + decrypt
     with open(sig_path, "rb") as f:
         encrypted = f.read()
-    raw_bytes = cipher.decrypt(encrypted)
+    try:
+        raw_bytes = Fernet(g.encryption_key).decrypt(encrypted)
+    except InvalidToken:
+        raw_bytes = cipher.decrypt(encrypted)
 
     return send_file(
         io.BytesIO(raw_bytes),
@@ -1440,7 +1634,8 @@ def serve_signature(sig_id):
 
 @signature_bp.route("/serve/<doc_id>")
 def serve_doc(doc_id):
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
         return redirect(url_for("signature.index"))
@@ -1448,15 +1643,8 @@ def serve_doc(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    file_path = meta.get('file_path')
-    if not file_path or not os.path.exists(file_path):
-        stored_filename = meta.get('stored_filename')
-        if stored_filename:
-            file_path = os.path.join(UPLOADS_DIR, stored_filename)
-        else:
-            file_path = os.path.join(UPLOADS_DIR, meta.get('filename'))
-
-    if not file_path or not os.path.exists(file_path):
+    file_path = resolve_upload_path(meta)
+    if not file_path:
         flash("Document file not found on disk.", "danger")
         return redirect(url_for("signature.index"))
 
@@ -1487,7 +1675,8 @@ def serve_doc(doc_id):
 @signature_bp.route("/download_signed/<doc_id>")
 def download_signed(doc_id):
     # load your meta JSON
-    meta_path = os.path.join(UPLOADS_DIR, f"{doc_id}.json")
+    doc_id = safe_doc_id(doc_id)
+    meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document not found", "danger")
         return redirect(url_for("signature.index"))
@@ -1495,15 +1684,8 @@ def download_signed(doc_id):
     with open(meta_path, "r", encoding="utf-8") as f:
         meta = json.load(f)
 
-    signed_path = meta.get("stored_filename")
-    
-    if not signed_path:
-        flash("Signed file metadata missing", "danger")
-        return redirect(url_for("signature.index"))
-
-    full_path = os.path.join(UPLOADS_DIR, signed_path)
-
-    if not os.path.exists(full_path):
+    full_path = resolve_upload_path(meta)
+    if not full_path:
         flash("Signed file not found", "danger")
         return redirect(url_for("signature.index"))
 

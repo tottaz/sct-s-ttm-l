@@ -23,6 +23,39 @@
                         <input type="password" class="form-control" id="confirm_password" name="confirm_password"
                             required>
                     </div>
+                    <hr class="my-4">
+                    <div class="mb-3">
+                        <label for="storage_dir" class="form-label">Encrypted Document Storage</label>
+                        <input type="text" class="form-control" id="storage_dir" name="storage_dir"
+                            value="{{ config.storage_dir }}" required>
+                        <div class="form-text">Choose a writable folder on the drive where encrypted documents should be stored.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="ollama_base_url" class="form-label">Ollama Base URL</label>
+                        <input type="text" class="form-control" id="ollama_base_url" name="ollama_base_url"
+                            value="{{ config.ollama_base_url or 'http://localhost:11434' }}">
+                    </div>
+                    <div class="mb-3">
+                        <label for="chat_model" class="form-label">Startup AI Model</label>
+                        <select class="form-select" id="chat_model" name="chat_model">
+                            <option value="" {% if not config.chat_model %}selected{% endif %}>Select a model later</option>
+                            {% if config.chat_model %}
+                            <option value="{{ config.chat_model }}" selected>{{ config.chat_model }}</option>
+                            {% endif %}
+                            {% for model in ollama_status.models %}
+                            <option value="{{ model }}" {% if config.chat_model == model %}selected{% endif %}>{{ model }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">
+                            {% if not ollama_status.installed %}
+                            Ollama is not installed. Download it from <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">ollama.com/download</a>.
+                            {% elif not ollama_status.running %}
+                            Ollama is installed but not running. Start Ollama, then return here to list local models.
+                            {% else %}
+                            Ollama is ready. You can change this model later in Settings.
+                            {% endif %}
+                        </div>
+                    </div>
                     <div class="d-grid">
                         <button type="submit" class="btn btn-success">Set Password & Start</button>
                     </div>

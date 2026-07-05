@@ -22,16 +22,19 @@ def decrypt_file_content(file_path: str, key: bytes) -> bytes:
     except Exception:
         return file_data
 
+VISION_MODEL = ""
+
+
 def get_available_vision_model():
+    if not VISION_MODEL:
+        return None
     try:
         response = ollama.list()
         models_list = response.models if hasattr(response, 'models') else response.get('models', [])
         available = [getattr(m, 'model', m.get('model')) if hasattr(m, 'model') or isinstance(m, dict) else str(m) for m in models_list]
-        for candidate in ["llava:latest", "llama3.2-vision:latest"]:
-            if candidate in available: return candidate
-        for name in available:
-            if "vision" in name or "llava" in name: return name
-        return None
+        if VISION_MODEL not in available:
+            ollama.pull(VISION_MODEL)
+        return VISION_MODEL
     except: return None
 
 def extract_text_from_image(raw_bytes: bytes) -> str:
@@ -90,11 +93,15 @@ def update_status(data_dir: str, status: str, message: str = ""):
         json.dump({"status": status, "message": message}, f)
 
 def main():
+    global VISION_MODEL
     parser = argparse.ArgumentParser()
     parser.add_argument("--key", required=True, help="Encryption key base64")
     parser.add_argument("--data-dir", required=True, help="Path to data dir")
     parser.add_argument("--method", choices=["python", "pytorch"], default="pytorch", help="Training method")
+    parser.add_argument("--model-name", required=True, help="Ollama model name to create")
+    parser.add_argument("--vision-model", default="", help="Configured Ollama vision model for OCR")
     args = parser.parse_args()
+    VISION_MODEL = args.vision_model
     
     update_status(args.data_dir, "running", "Loading documents...")
 
@@ -142,7 +149,7 @@ def main():
             state_dict = train_pure_python(docs, uchars, vocab_size, n_layer, n_embd, block_size, n_head)
             
         update_status(args.data_dir, "running", "Exporting model to GGUF format...")
-        export_to_gguf(state_dict, uchars, vocab_size, n_embd, n_layer, n_head, block_size, args.data_dir)
+        export_to_gguf(state_dict, uchars, vocab_size, n_embd, n_layer, n_head, block_size, args.data_dir, args.model_name)
         
         update_status(args.data_dir, "completed", "Training successfully complete. You can now use the model.")
     except Exception as e:
@@ -430,12 +437,13 @@ def train_pytorch(docs, uchars, vocab_size, n_layer, n_embd, block_size, n_head)
 
     return custom_state
 
-def export_to_gguf(state_dict, uchars, vocab_size, n_embd, n_layer, n_head, block_size, data_dir):
+def export_to_gguf(state_dict, uchars, vocab_size, n_embd, n_layer, n_head, block_size, data_dir, model_name):
     import gguf
     import numpy as np
     import subprocess
     
-    gguf_writer = gguf.GGUFWriter(os.path.join(data_dir, "local-gpt.gguf"), "llama")
+    model_filename = "custom-model.gguf"
+    gguf_writer = gguf.GGUFWriter(os.path.join(data_dir, model_filename), "llama")
     
     # Add metadata
     gguf_writer.add_name("PyGPT")
@@ -494,13 +502,13 @@ def export_to_gguf(state_dict, uchars, vocab_size, n_embd, n_layer, n_head, bloc
     gguf_writer.close()
 
     # Create Ollama model
-    modelfile_path = os.path.join(data_dir, "Modelfile.localgpt")
+    modelfile_path = os.path.join(data_dir, "Modelfile.custom")
     with open(modelfile_path, "w") as f:
-        f.write(f"FROM ./local-gpt.gguf\n")
+        f.write(f"FROM ./{model_filename}\n")
         f.write(f"TEMPLATE \"\"\"\n{{{{ .Prompt }}}}\"\"\"\n")
         
     try:
-        subprocess.run(["ollama", "create", "local-gpt", "-f", modelfile_path], check=True)
+        subprocess.run(["ollama", "create", model_name, "-f", modelfile_path], check=True)
     except subprocess.CalledProcessError as e:
         pass
 

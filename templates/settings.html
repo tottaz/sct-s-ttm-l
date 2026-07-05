@@ -9,25 +9,6 @@
             </div>
             <div class="card-body">
                 <form method="POST">
-                    <div class="form-check form-switch mb-4">
-                        <input class="form-check-input" type="checkbox" id="use_openai" name="use_openai" {% if
-                            config.use_openai %}checked{% endif %}>
-                        <label class="form-check-label fw-bold" for="use_openai">Use OpenAI for Analysis</label>
-                        <div class="form-text">When enabled, the app will use OpenAI's models. When disabled, it will
-                            use local Ollama.</div>
-                    </div>
-
-                    <div id="openai_settings" class="mb-4">
-                        <label for="openai_api_key" class="form-label fw-bold">OpenAI API Key</label>
-                        <div class="input-group">
-                            <input type="password" class="form-control" id="openai_api_key" name="openai_api_key"
-                                value="{{ config.openai_api_key }}" placeholder="sk-...">
-                            <button class="btn btn-outline-secondary" type="button" id="toggle_openai_key">
-                                <i class="bi bi-eye"></i>
-                            </button>
-                        </div>
-                    </div>
-
                     <div class="mb-4">
                         <label for="ollama_base_url" class="form-label fw-bold">Ollama Base URL</label>
                         <input type="text" class="form-control" id="ollama_base_url" name="ollama_base_url"
@@ -35,33 +16,59 @@
                         <div class="form-text">The address where your local Ollama server is running.</div>
                     </div>
 
+                    <div class="mb-4">
+                        <label for="storage_dir" class="form-label fw-bold">Encrypted Document Storage</label>
+                        <input type="text" class="form-control" id="storage_dir" name="storage_dir"
+                            value="{{ config.storage_dir }}" placeholder="/Volumes/SecureDrive/Sattmal">
+                        <div class="form-text">Use a writable folder on the drive where encrypted uploads and signatures should live.</div>
+                    </div>
+
                     <div id="ollama_models_section">
                         <hr class="my-4">
                         <h6 class="mb-3 text-primary">Model Selection</h6>
+                        {% if not ollama_status.installed %}
+                        <div class="alert alert-warning small">
+                            Ollama is not installed. Download it from <a href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">ollama.com/download</a>.
+                        </div>
+                        {% elif not ollama_status.running %}
+                        <div class="alert alert-warning small">
+                            Ollama is installed but not running. Start Ollama to refresh the local model list.
+                        </div>
+                        {% endif %}
 
                         <div class="mb-3">
                             <label for="vision_model" class="form-label fw-bold">Vision Model (for images/scanned
                                 PDFs)</label>
                             <select class="form-select" id="vision_model" name="vision_model">
-                                <option value="" {% if not config.vision_model %}selected{% endif %}>Auto-detect
+                                <option value="" {% if not config.vision_model %}selected{% endif %}>Select a model
                                 </option>
                                 {% for model in ollama_models %}
                                 <option value="{{ model }}" {% if config.vision_model==model %}selected{% endif %}>{{
                                     model }}</option>
                                 {% endfor %}
                             </select>
-                            <div class="form-text">Select a vision-capable model (like llava or llama3.2-vision).</div>
+                            <div class="form-text">Select the local model you want to use for images and scanned PDFs.</div>
                         </div>
 
                         <div class="mb-3">
                             <label for="chat_model" class="form-label fw-bold">Chat/Analysis Model</label>
                             <select class="form-select" id="chat_model" name="chat_model">
+                                {% if config.chat_model and config.chat_model not in ollama_models %}
+                                <option value="{{ config.chat_model }}" selected>{{ config.chat_model }}</option>
+                                {% endif %}
+                                <option value="" {% if not config.chat_model %}selected{% endif %}>Select a model</option>
                                 {% for model in ollama_models %}
-                                <option value="{{ model }}" {% if config.chat_model==model or (not config.chat_model and
-                                    model=='llama3.2:latest' ) %}selected{% endif %}>{{ model }}</option>
+                                <option value="{{ model }}" {% if config.chat_model==model %}selected{% endif %}>{{ model }}</option>
                                 {% endfor %}
                             </select>
-                            <div class="form-text">Used for analysis and translation. Default: llama3.2:latest</div>
+                            <div class="form-text">Used for analysis, translation, response drafting, and chat.</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="custom_model_name" class="form-label fw-bold">Custom Trained Model Name</label>
+                            <input type="text" class="form-control" id="custom_model_name" name="custom_model_name"
+                                value="{{ config.custom_model_name }}" placeholder="Name for your trained local model">
+                            <div class="form-text">Used by Train Custom Model and Search with Custom Model.</div>
                         </div>
                     </div>
 
@@ -135,6 +142,99 @@
                     <button class="btn btn-success" id="addCategoryBtn">Add</button>
                 </div>
                 <div id="categoryMsg" class="mt-2"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Experimental Local Model Tools -->
+<div class="row justify-content-center mt-4">
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-warning d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Experimental Custom Model Tools</h5>
+                <button class="btn btn-sm btn-outline-dark" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#experimentalModelTools" aria-expanded="false"
+                    aria-controls="experimentalModelTools">
+                    Options
+                </button>
+            </div>
+            <div class="collapse" id="experimentalModelTools">
+                <div class="card-body">
+                    <p class="text-muted small">These tools are experimental and may be slow or unreliable depending on your documents and hardware. Save your custom model name above before using them.</p>
+                    <div class="d-grid gap-2">
+                        <button id="train-local-model-btn" class="btn btn-secondary" type="button">Train Custom Model</button>
+                        <button id="search-local-model-btn" class="btn btn-outline-primary" type="button" data-bs-toggle="modal"
+                            data-bs-target="#searchCustomModelModal">Search Custom Model</button>
+                    </div>
+                    <div id="experimentalModelMsg" class="mt-3"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Training Options Modal -->
+<div class="modal fade" id="trainOptionsModal" tabindex="-1" aria-labelledby="trainOptionsModalLabel"
+    aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="trainOptionsModalLabel">Train Custom Local Model</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Choose the training backend. PyTorch is faster and recommended. Pure Python is extremely slow.</p>
+                <div class="form-check mb-2">
+                    <input class="form-check-input" type="radio" name="trainMethod" id="methodPytorch" value="pytorch"
+                        checked>
+                    <label class="form-check-label fw-bold" for="methodPytorch">PyTorch</label>
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="radio" name="trainMethod" id="methodPython" value="python">
+                    <label class="form-check-label text-danger" for="methodPython">Pure Python</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="start-training-btn">Start Training</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Training Progress Modal -->
+<div class="modal fade" id="trainingProgressModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1"
+    aria-labelledby="trainingProgressModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body text-center p-5">
+                <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
+                    <span class="visually-hidden">Training...</span>
+                </div>
+                <h5 id="training-status-text">Training model in progress...</h5>
+                <p class="text-muted small mt-2">Please keep this page open. This may take a few minutes depending on your documents and the chosen framework.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Search Custom Model Modal -->
+<div class="modal fade" id="searchCustomModelModal" tabindex="-1" aria-labelledby="searchCustomModelModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="searchCustomModelModalLabel">Search Custom Local Model</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Ask questions using the locally trained experimental model.</p>
+                <div class="input-group mb-3">
+                    <input type="text" id="custom-model-search-input" class="form-control" placeholder="Ask a question..."
+                        aria-label="Ask a question">
+                    <button class="btn btn-primary" type="button" id="submit-custom-model-search">Ask</button>
+                </div>
+                <div id="custom-model-search-result" class="mt-3"></div>
             </div>
         </div>
     </div>
@@ -255,13 +355,114 @@
 </script>
 
 <script>
-    const useOpenAiSwitch = document.getElementById('use_openai');
-    const openaiSettings = document.getElementById('openai_settings');
+    const trainOptionsModal = new bootstrap.Modal(document.getElementById('trainOptionsModal'));
+    const trainingProgressModal = new bootstrap.Modal(document.getElementById('trainingProgressModal'));
+    let trainingPollInterval = null;
 
-    function toggleOpenAiSettings() {
-        openaiSettings.style.display = useOpenAiSwitch.checked ? 'block' : 'none';
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
+    function showExperimentalMsg(text, type = 'danger') {
+        const el = document.getElementById('experimentalModelMsg');
+        el.innerHTML = `<div class="alert alert-${type} py-2 px-3 small">${escapeHtml(text)}</div>`;
+        setTimeout(() => el.innerHTML = '', 4000);
+    }
+
+    function selectedTrainingMethod() {
+        const selected = document.querySelector('input[name="trainMethod"]:checked');
+        return selected ? selected.value : 'pytorch';
+    }
+
+    function pollTrainingStatus() {
+        fetch("{{ url_for('signature.training_status') }}")
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'running') {
+                    document.getElementById('training-status-text').textContent = data.message || 'Training...';
+                } else if (data.status === 'completed') {
+                    clearInterval(trainingPollInterval);
+                    trainingProgressModal.hide();
+                    showExperimentalMsg('Training completed. You can now search with the custom model.', 'success');
+                } else if (data.status === 'error') {
+                    clearInterval(trainingPollInterval);
+                    trainingProgressModal.hide();
+                    showExperimentalMsg('Training failed: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(() => {});
+    }
+
+    document.getElementById('train-local-model-btn').addEventListener('click', () => {
+        trainOptionsModal.show();
+    });
+
+    document.getElementById('start-training-btn').addEventListener('click', () => {
+        const btn = document.getElementById('start-training-btn');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Starting...';
+
+        fetch("{{ url_for('signature.train_local_gpt') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({method: selectedTrainingMethod()})
+        })
+            .then(r => r.json().then(data => ({ok: r.ok, data})))
+            .then(({ok, data}) => {
+                if (!ok || data.error) {
+                    throw new Error(data.error || 'Could not start training.');
+                }
+                trainOptionsModal.hide();
+                document.getElementById('training-status-text').textContent = 'Starting training background process...';
+                trainingProgressModal.show();
+                if (trainingPollInterval) clearInterval(trainingPollInterval);
+                trainingPollInterval = setInterval(pollTrainingStatus, 3000);
+            })
+            .catch(error => showExperimentalMsg(error.message))
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            });
+    });
+
+    document.getElementById('submit-custom-model-search').addEventListener('click', () => {
+        const input = document.getElementById('custom-model-search-input');
+        const query = input.value.trim();
+        if (!query) return;
+
+        const resultDiv = document.getElementById('custom-model-search-result');
+        const btn = document.getElementById('submit-custom-model-search');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Searching...';
+        resultDiv.innerHTML = '<div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>';
+
+        fetch("{{ url_for('signature.search_local_gpt') }}", {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({query})
+        })
+            .then(r => r.json().then(data => ({ok: r.ok, data})))
+            .then(({ok, data}) => {
+                if (!ok || data.error) {
+                    throw new Error(data.error || 'Search failed.');
+                }
+                resultDiv.innerHTML = `<div class="alert alert-success mt-3">${escapeHtml(data.response).replace(/\n/g, '<br>')}</div>`;
+            })
+            .catch(error => {
+                resultDiv.innerHTML = `<div class="alert alert-danger mt-3">Error: ${escapeHtml(error.message)}</div>`;
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            });
+    });
+</script>
+
+<script>
     function setupPasswordToggle(inputId, buttonId) {
         const input = document.getElementById(inputId);
         const button = document.getElementById(buttonId);
@@ -278,10 +479,6 @@
         });
     }
 
-    setupPasswordToggle('openai_api_key', 'toggle_openai_key');
     setupPasswordToggle('app_password', 'toggle_app_password');
-
-    useOpenAiSwitch.addEventListener('change', toggleOpenAiSettings);
-    toggleOpenAiSettings(); // Initial state
 </script>
 {% endblock %}

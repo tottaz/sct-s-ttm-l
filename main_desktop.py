@@ -15,7 +15,7 @@ def run_flask(port):
     app.run(host='127.0.0.1', port=port, debug=False, threaded=True)
 
 if __name__ == '__main__':
-    port = 5040 # Use fixed port for now, or dynamic if preferred
+    port = get_free_port()
     
     # Start Flask in a background thread
     t = threading.Thread(target=run_flask, args=(port,))

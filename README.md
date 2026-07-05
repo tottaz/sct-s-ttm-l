@@ -12,7 +12,7 @@ Store documents and signatures locally (JSON + filesystem) — no external DB ne
 
 Install as a Progressive Web App (PWA) on mobile or desktop
 
-Optional document “Explain Mode” using AI (Ollama or OpenAI) to simplify legal text
+Optional document “Explain Mode” using local Ollama models to simplify legal text
 
 # Tech Stack
 
@@ -24,7 +24,7 @@ Service Worker + Web Manifest (PWA support)
 
 Local storage (filesystem + JSON file database)
 
-Optional: Ollama / OpenAI for natural language analysis
+Optional: Ollama for local natural language analysis
 
 Getting Started
 1. Clone the repository
@@ -67,11 +67,7 @@ Launch it like a native app — fullscreen, offline-capable, background sync for
 
 If you want document explanation:
 
-Install Ollama locally and run ollama pull llama2.
-
-Or set your OpenAI API key as an environment variable:
-
-export OPENAI_API_KEY=your_key_here
+Install Ollama locally, pull the model you want to use, and select it in Settings.
 
 
 Then, use /analyse_doc/<doc_id> to get simplified text for what you are signing.
@@ -105,4 +101,3 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 # set it in your shell or .env
 export FERNET_KEY="PASTE_YOUR_KEY_HERE"
-

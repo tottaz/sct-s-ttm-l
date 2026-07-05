@@ -5,7 +5,7 @@ a = Analysis(
     ['main_desktop.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('static', 'static'), ('uploads', 'uploads'), ('config.json', '.')],
+    datas=[('templates', 'templates'), ('static', 'static'), ('uploads', 'uploads'), ('config.json', '.'), ('documentation.md', '.')],
     hiddenimports=['flask', 'webview', 'pdfplumber', 'docx', 'markdown'],
     hookspath=[],
     hooksconfig={},

@@ -12,7 +12,7 @@
   </div>
 
   <div class="row">
-    <div class="col-lg-9">
+    <div class="col-lg-8">
       <!-- PDF Canvas Container -->
       <div class="position-relative shadow-sm bg-light" id="pdfContainer"
         style="min-height:700px; border:1px solid #dee2e6; overflow:auto;">
@@ -47,7 +47,7 @@
     </div>
 
     <!-- Controls Panel -->
-    <div class="col-lg-3">
+    <div class="col-lg-4">
       <div class="card shadow-sm mb-4">
         <div class="card-header bg-dark text-white">
           <h5 class="mb-0">Sign & Annotate</h5>
@@ -64,14 +64,14 @@
             </li>
             <li class="nav-item">
               <button class="nav-link" id="type-tab" data-bs-toggle="tab" data-bs-target="#type"
-                type="button">Type</button>
+                type="button">Type Name</button>
             </li>
           </ul>
 
           <div class="tab-content" id="toolTabsContent">
             <!-- Signature Tab -->
             <div class="tab-pane fade show active" id="sign">
-              <div class="border rounded mb-2 bg-white" style="height:150px;">
+              <div class="signature-pad-wrap border rounded mb-2 bg-white">
                 <canvas id="signaturePad" style="width:100%; height:100%; touch-action: none;"></canvas>
               </div>
               <div class="d-grid gap-2 mb-3">
@@ -108,12 +108,15 @@
             <div class="tab-pane fade" id="type">
               <div class="mb-3">
                 <label class="form-label small text-muted text-uppercase fw-bold" style="font-size: 10px;">Type your
-                  name</label>
-                <input type="text" id="signatureTypeName" class="form-control form-control-sm" placeholder="Your Name">
+                  name for signature options</label>
+                <input type="text" id="signatureTypeName" class="form-control" placeholder="Your full name">
               </div>
-              <div id="signatureTypePreviews" class="d-grid gap-2" style="max-height: 250px; overflow-y: auto;">
+              <div id="signatureTypePreviews" class="d-grid gap-2" style="max-height: 360px; overflow-y: auto;">
                 <div class="text-center py-4 text-muted small">Enter your name above to see suggestions</div>
               </div>
+              <button id="saveTypedSignature" class="btn btn-outline-success btn-sm w-100 mt-3" disabled>
+                Store Selected Signature
+              </button>
             </div>
           </div>
 
@@ -220,18 +223,26 @@
     font-size: 0.75rem;
   }
 
+  .signature-pad-wrap {
+    height: 230px;
+  }
+
   .sig-preview-item {
     cursor: pointer;
     border: 1px solid #dee2e6;
-    padding: 10px;
+    padding: 12px;
     background: white;
     transition: all 0.2s;
     text-align: center;
     border-radius: 4px;
-    font-size: 24px;
+    min-height: 76px;
+    font-size: 30px;
     line-height: 1;
-    overflow: hidden;
+    overflow: visible;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .sig-preview-item:hover {
@@ -412,45 +423,88 @@
     // ---------- Type-to-Sign Logic ----------
     const typeInput = document.getElementById("signatureTypeName");
     const previewsContainer = document.getElementById("signatureTypePreviews");
+    const saveTypedSignatureBtn = document.getElementById("saveTypedSignature");
+    let selectedTypedSignature = null;
     const signatureFonts = [
-      { name: 'Dancing Script', family: "'Dancing Script', cursive" },
-      { name: 'Alex Brush', family: "'Alex Brush', cursive" },
-      { name: 'Great Vibes', family: "'Great Vibes', cursive" },
-      { name: 'Sacramento', family: "'Sacramento', cursive" }
+      { name: 'Dancing Script', family: "'Dancing Script', cursive", weight: 400, skew: 0 },
+      { name: 'Alex Brush', family: "'Alex Brush', cursive", weight: 400, skew: -6 },
+      { name: 'Great Vibes', family: "'Great Vibes', cursive", weight: 400, skew: 0 },
+      { name: 'Sacramento', family: "'Sacramento', cursive", weight: 400, skew: -4 },
+      { name: 'Dancing Script Bold', family: "'Dancing Script', cursive", weight: 700, skew: 0 },
+      { name: 'Great Vibes Slanted', family: "'Great Vibes', cursive", weight: 400, skew: -8 },
+      { name: 'Sacramento Fine', family: "'Sacramento', cursive", weight: 300, skew: 0 },
+      { name: 'Alex Brush Strong', family: "'Alex Brush', cursive", weight: 700, skew: -5 }
     ];
 
     typeInput.addEventListener("input", () => {
       const name = typeInput.value.trim();
       if (!name) {
         previewsContainer.innerHTML = '<div class="text-center py-4 text-muted small">Enter your name above to see suggestions</div>';
+        selectedTypedSignature = null;
+        saveTypedSignatureBtn.disabled = true;
         return;
       }
 
       previewsContainer.innerHTML = "";
+      selectedTypedSignature = null;
+      saveTypedSignatureBtn.disabled = true;
       signatureFonts.forEach(font => {
         const div = document.createElement("div");
         div.className = "sig-preview-item";
         div.style.fontFamily = font.family;
+        div.style.fontWeight = font.weight;
+        div.style.fontStyle = font.skew ? "italic" : "normal";
+        div.style.fontSize = signaturePreviewSize(name) + "px";
         div.textContent = name;
+        div.title = font.name;
         div.onclick = () => {
-          const dataUrl = captureFontAsImage(name, font.family);
+          const dataUrl = captureFontAsImage(name, font);
+          selectedTypedSignature = dataUrl;
+          saveTypedSignatureBtn.disabled = false;
+          document.querySelectorAll('.sig-preview-item').forEach(item => item.classList.remove('active'));
+          div.classList.add('active');
           preparePlacement('signature', dataUrl);
         };
         previewsContainer.appendChild(div);
       });
     });
 
+    function signaturePreviewSize(text) {
+      if (text.length > 34) return 20;
+      if (text.length > 26) return 23;
+      if (text.length > 18) return 26;
+      return 30;
+    }
+
+    function fitSignatureFont(ctx, text, font, maxWidth, startSize) {
+      let size = startSize;
+      do {
+        ctx.font = `${font.weight || 400} ${size}px ${font.family}`;
+        if (ctx.measureText(text).width <= maxWidth) return size;
+        size -= 2;
+      } while (size >= 22);
+      return 22;
+    }
+
     function captureFontAsImage(text, font) {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
-      canvas.width = 450;
-      canvas.height = 150;
+      canvas.width = 900;
+      canvas.height = 260;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "black";
-      ctx.font = `42px ${font}`;
+      const size = fitSignatureFont(ctx, text, font, canvas.width - 80, 86);
+      ctx.font = `${font.weight || 400} ${size}px ${font.family}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
+      if (font.skew) {
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.transform(1, 0, Math.tan(font.skew * Math.PI / 180), 1, 0, 0);
+        ctx.fillText(text, 0, 0);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        return canvas.toDataURL("image/png");
+      }
       ctx.fillText(text, canvas.width / 2, canvas.height / 2);
 
       return canvas.toDataURL("image/png");
@@ -482,7 +536,6 @@
     document.getElementById('confirmText').addEventListener('click', () => {
       let content = "";
       if (currentTool.type === 'text') content = document.getElementById('annotationText').value;
-      if (currentTool.type === 'text') content = document.getElementById('annotationText').value;
       else if (currentTool.type === 'number') content = document.getElementById('annotationNumber').value;
       else if (currentTool.type === 'date') content = document.getElementById('annotationDate').value;
 
@@ -499,11 +552,11 @@
       if (type === 'signature') {
         const img = document.createElement('img');
         img.src = content;
-        img.style.width = '150px';
-        img.style.height = '50px';
+        img.style.width = '220px';
+        img.style.height = '70px';
         activeContent.appendChild(img);
-        activeDraggable.style.width = '150px';
-        activeDraggable.style.height = '50px';
+        activeDraggable.style.width = '220px';
+        activeDraggable.style.height = '70px';
       } else {
         activeContent.textContent = content;
         activeContent.style.padding = '2px 5px';
@@ -602,6 +655,22 @@
       if (data.success) {
         alert("Signature saved!");
         loadSavedSignatures();
+      }
+    });
+
+    saveTypedSignatureBtn.addEventListener("click", async () => {
+      if (!selectedTypedSignature) return;
+      const resp = await fetch("{{ url_for('signature.save_signature') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signature: selectedTypedSignature, doc_id: "{{ document.id }}" })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        alert("Signature saved!");
+        loadSavedSignatures();
+      } else {
+        alert("Error saving signature: " + (data.error || "Unknown error"));
       }
     });
 

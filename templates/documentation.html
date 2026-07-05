@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-9">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2 class="mb-0">Documentation</h2>
+            <a href="{{ url_for('signature.index') }}" class="btn btn-outline-secondary btn-sm">Back to Documents</a>
+        </div>
+        <div class="documentation-content">
+            {{ doc_html | safe }}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block head %}
+{{ super() }}
+<style>
+    .documentation-content {
+        line-height: 1.65;
+    }
+
+    .documentation-content h1,
+    .documentation-content h2,
+    .documentation-content h3 {
+        margin-top: 1.75rem;
+        margin-bottom: 0.75rem;
+        font-weight: 650;
+    }
+
+    .documentation-content h1:first-child,
+    .documentation-content h2:first-child {
+        margin-top: 0;
+    }
+
+    .documentation-content code {
+        background: #f1f3f5;
+        border-radius: 4px;
+        padding: 0.1rem 0.3rem;
+    }
+
+    .documentation-content pre {
+        background: #212529;
+        color: #f8f9fa;
+        border-radius: 6px;
+        padding: 1rem;
+        overflow-x: auto;
+    }
+
+    .documentation-content pre code {
+        background: transparent;
+        color: inherit;
+        padding: 0;
+    }
+</style>
+{% endblock %}

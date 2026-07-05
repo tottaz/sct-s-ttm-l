@@ -43,6 +43,11 @@
                                 data-bs-target="#pills-respond" type="button" role="tab" aria-controls="pills-respond"
                                 aria-selected="false">Respond</button>
                         </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="pills-chat-tab" data-bs-toggle="pill"
+                                data-bs-target="#pills-chat" type="button" role="tab" aria-controls="pills-chat"
+                                aria-selected="false">Chat</button>
+                        </li>
                     </ul>
 
                     <div class="tab-content" id="pills-tabContent">
@@ -143,6 +148,31 @@
                                 <span id="resp-spinner" class="spinner-border spinner-border-sm d-none" role="status"
                                     aria-hidden="true"></span>
                                 <span id="resp-btn-text">Generate Response</span>
+                            </button>
+                        </div>
+
+                        <!-- Chat Tab -->
+                        <div class="tab-pane fade" id="pills-chat" role="tabpanel"
+                            aria-labelledby="pills-chat-tab">
+                            <div class="mb-3">
+                                <label for="chat-question" class="form-label">Question</label>
+                                <textarea class="form-control" id="chat-question" rows="4"
+                                    placeholder="Ask about a clause, penalty, section, obligation, or change."></textarea>
+                            </div>
+                            <div class="d-grid gap-2 mb-3">
+                                <button type="button" class="btn btn-outline-secondary btn-sm text-start chat-example"
+                                    data-question="What does this clause actually mean?">What does this clause actually mean?</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm text-start chat-example"
+                                    data-question="Are there any penalties I should know about?">Are there any penalties I should know about?</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm text-start chat-example"
+                                    data-question="What am I agreeing to in section four?">What am I agreeing to in section four?</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm text-start chat-example"
+                                    data-question="What changed between my results from last year and this year?">What changed between my results from last year and this year?</button>
+                            </div>
+                            <button id="chat-btn" class="btn btn-primary w-100">
+                                <span id="chat-spinner" class="spinner-border spinner-border-sm d-none" role="status"
+                                    aria-hidden="true"></span>
+                                <span id="chat-btn-text">Ask</span>
                             </button>
                         </div>
                     </div>
@@ -362,6 +392,64 @@
                 btn.disabled = false;
                 spinner.classList.add('d-none');
                 text.textContent = 'Generate Response';
+                alert("Error: " + error);
+            });
+    });
+
+    document.querySelectorAll('.chat-example').forEach(button => {
+        button.addEventListener('click', function () {
+            document.getElementById('chat-question').value = this.dataset.question;
+        });
+    });
+
+    document.getElementById('chat-btn').addEventListener('click', function () {
+        const question = document.getElementById('chat-question').value.trim();
+        if (!question) {
+            alert('Please enter a question.');
+            return;
+        }
+
+        const btn = this;
+        const spinner = document.getElementById('chat-spinner');
+        const text = document.getElementById('chat-btn-text');
+        const display = document.getElementById('content-display');
+        const title = document.getElementById('result-title');
+
+        btn.disabled = true;
+        spinner.classList.remove('d-none');
+        text.textContent = ' Asking...';
+
+        fetch("{{ url_for('signature.ask_doc', doc_id=doc.id) }}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ question })
+        })
+            .then(response => response.json())
+            .then(data => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                text.textContent = 'Ask';
+
+                if (data.success) {
+                    const questionEl = document.createElement('div');
+                    questionEl.className = 'alert alert-secondary';
+                    questionEl.textContent = question;
+                    display.innerHTML = '';
+                    display.appendChild(questionEl);
+                    const answerEl = document.createElement('div');
+                    answerEl.innerHTML = data.answer;
+                    display.appendChild(answerEl);
+                    title.textContent = 'Document Chat';
+                } else {
+                    alert("Error: " + data.error);
+                }
+            })
+            .catch(error => {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+                text.textContent = 'Ask';
                 alert("Error: " + error);
             });
     });

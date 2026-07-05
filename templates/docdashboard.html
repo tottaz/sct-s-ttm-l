@@ -35,18 +35,12 @@
         </div>
     </form>
 
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h3 class="mb-0">Your Documents</h3>
-        <div>
-            <button id="train-local-gpt-btn" class="btn btn-secondary me-2">Train Custom Model</button>
-            <button id="search-local-gpt-btn" class="btn btn-outline-primary" data-bs-toggle="modal"
-                data-bs-target="#searchGptModal">Search with Custom Model</button>
-        </div>
-    </div>
+    <h3 class="mb-3">Your Documents</h3>
     <table class="table table-bordered table-striped table-hover" id="documents-table">
         <thead>
             <tr>
                 <th>Document</th>
+                <th>Category</th>
                 <th>Type</th>
                 <th>Status</th>
                 <th>Uploaded</th>
@@ -59,8 +53,8 @@
                 <td>
                     <div class="fw-semibold">{{ doc.title or doc.filename }}</div>
                     {% if doc.description %}<div class="text-muted small">{{ doc.description }}</div>{% endif %}
-                    {% if doc.category %}<span class="badge bg-secondary">{{ doc.category }}</span>{% endif %}
                 </td>
+                <td>{% if doc.category %}<span class="badge bg-secondary">{{ doc.category }}</span>{% else %}<span class="text-muted">Uncategorized</span>{% endif %}</td>
                 <td>{{ doc.type }}</td>
                 <td>{{ doc.status }}</td>
                 <td>
@@ -86,8 +80,9 @@
                         <a href="{{ url_for('signature.docsign', doc_id=doc.id) }}" class="btn btn-sm btn-primary"
                             title="Sign">Sign</a>
                         {% endif %}
-                        <a href="{{ url_for('signature.download_doc', doc_id=doc.id) }}" class="btn btn-sm btn-success"
-                            title="Download">Download</a>
+                        <button type="button" class="btn btn-sm btn-success download-doc-btn"
+                            data-url="{{ url_for('signature.download_doc', doc_id=doc.id) }}"
+                            data-filename="{{ doc.filename }}" title="Download">Download</button>
                         <form action="{{ url_for('signature.docdelete', doc_id=doc.id) }}" method="POST"
                             style="display:inline;" onsubmit="return confirm('Are you sure?');">
                             <button type="submit" class="btn btn-sm btn-danger" title="Delete">Delete</button>
@@ -97,7 +92,7 @@
             </tr>
             {% else %}
             <tr>
-                <td colspan="5" class="text-center">No documents found.</td>
+                <td colspan="6" class="text-center">No documents found.</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -140,9 +135,9 @@
         $('#documents-table').DataTable({
             "pageLength": 10,
             "lengthMenu": [[10, 25, 50, -1], [10, 25, 50, "All"]],
-            "order": [[3, "desc"]], // Sort by upload date descending
+            "order": [[4, "desc"]], // Sort by upload date descending
             "columnDefs": [
-                { "orderable": false, "targets": 4 } // Disable sorting on Actions column
+                { "orderable": false, "targets": 5 } // Disable sorting on Actions column
             ],
             "language": {
                 "search": "Search documents:",
@@ -171,160 +166,38 @@
         });
     });
 
-    // Train local GPT button opens modal instead
-    $('#train-local-gpt-btn').click(function () {
-        $('#trainOptionsModal').modal('show');
-    });
+    document.querySelectorAll('.download-doc-btn').forEach(button => {
+        button.addEventListener('click', function () {
+            const btn = this;
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Downloading...';
 
-    let trainingPollInterval = null;
-
-    function pollTrainingStatus() {
-        $.ajax({
-            url: "{{ url_for('signature.training_status') }}",
-            type: "GET",
-            success: function (data) {
-                if (data.status === "running") {
-                    $('#training-status-text').text(data.message || 'Training...');
-                    $('#trainOptionsModal').modal('hide');
-                    $('#trainingProgressModal').modal('show');
-                } else if (data.status === "completed") {
-                    clearInterval(trainingPollInterval);
-                    $('#trainingProgressModal').modal('hide');
-                    alert("Training completed! You can now search with the custom model.");
-                } else if (data.status === "error") {
-                    clearInterval(trainingPollInterval);
-                    $('#trainingProgressModal').modal('hide');
-                    alert("Training failed: " + data.message);
-                }
-            }
-        });
-    }
-
-    $('#start-training-btn').click(function () {
-        let method = $('input[name="trainMethod"]:checked').val();
-
-        $.ajax({
-            url: "{{ url_for('signature.train_local_gpt') }}",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify({ method: method }),
-            success: function (data) {
-                $('#trainOptionsModal').modal('hide');
-                $('#trainingProgressModal').modal({ backdrop: 'static', keyboard: false }).modal('show');
-                $('#training-status-text').text("Starting training background process...");
-                // Start polling
-                if (trainingPollInterval) clearInterval(trainingPollInterval);
-                trainingPollInterval = setInterval(pollTrainingStatus, 3000);
-            },
-            error: function (err) {
-                alert("Error starting training.");
-            }
-        });
-    });
-
-    // Search local GPT
-    $('#submit-gpt-search').click(function () {
-        let query = $('#gpt-search-input').val().trim();
-        if (!query) return;
-
-        let resultDiv = $('#gpt-search-result');
-        let btn = $(this);
-        let originalText = btn.text();
-
-        btn.prop('disabled', true).text('Searching...');
-        resultDiv.html('<div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>');
-
-        $.ajax({
-            url: "{{ url_for('signature.search_local_gpt') }}",
-            type: "POST",
-            contentType: "application/json",
-            data: JSON.stringify({ query: query }),
-            success: function (data) {
-                if (data.success) {
-                    resultDiv.html('<div class="alert alert-success mt-3">' + data.response.replace(/\n/g, '<br>') + '</div>');
-                } else {
-                    resultDiv.html('<div class="alert alert-danger mt-3">Error: ' + data.error + '</div>');
-                }
-                btn.prop('disabled', false).text(originalText);
-            },
-            error: function (err) {
-                resultDiv.html('<div class="alert alert-danger mt-3">Error searching custom model. Is Ollama running and model trained?</div>');
-                btn.prop('disabled', false).text(originalText);
-            }
+            fetch(btn.dataset.url)
+                .then(response => {
+                    if (!response.ok) throw new Error('Download failed');
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = btn.dataset.filename || 'document';
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    }, 200);
+                })
+                .catch(error => {
+                    alert('Download error: ' + error.message);
+                })
+                .finally(() => {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                });
         });
     });
 </script>
-
-<!-- Training Options Modal -->
-<div class="modal fade" id="trainOptionsModal" tabindex="-1" aria-labelledby="trainOptionsModalLabel"
-    aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="trainOptionsModalLabel">Train Custom Local Model</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <p>Choose the training backend. PyTorch is massively faster and recommended. Pure Python has zero
-                    dependencies but is extremely slow.</p>
-                <div class="form-check mb-2">
-                    <input class="form-check-input" type="radio" name="trainMethod" id="methodPytorch" value="pytorch"
-                        checked>
-                    <label class="form-check-label font-weight-bold" for="methodPytorch">
-                        PyTorch (Recommended, Fast)
-                    </label>
-                </div>
-                <div class="form-check mb-3">
-                    <input class="form-check-input" type="radio" name="trainMethod" id="methodPython" value="python">
-                    <label class="form-check-label text-danger" for="methodPython">
-                        Pure Python (0 process dependencies, VERY Slow)
-                    </label>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="start-training-btn">Start Training</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Training Progress Modal -->
-<div class="modal fade" id="trainingProgressModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1"
-    aria-labelledby="trainingProgressModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content">
-            <div class="modal-body text-center p-5">
-                <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
-                    <span class="visually-hidden">Training...</span>
-                </div>
-                <h5 id="training-status-text">Training model in progress...</h5>
-                <p class="text-muted small mt-2">Please keep this page open. This may take a few minutes depending on
-                    your documents and the chosen framework.</p>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Search Custom GPT Modal -->
-<div class="modal fade" id="searchGptModal" tabindex="-1" aria-labelledby="searchGptModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="searchGptModalLabel">Search Custom Local Model</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <p class="text-muted small">Ask questions about your uploaded documents using the locally trained custom
-                    model.</p>
-                <div class="input-group mb-3">
-                    <input type="text" id="gpt-search-input" class="form-control" placeholder="Ask a question..."
-                        aria-label="Ask a question">
-                    <button class="btn btn-primary" type="button" id="submit-gpt-search">Ask</button>
-                </div>
-                <div id="gpt-search-result" class="mt-3"></div>
-            </div>
-        </div>
-    </div>
-</div>
 {% endblock %}
