@@ -5,7 +5,13 @@ a = Analysis(
     ['main_desktop.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('static', 'static'), ('uploads', 'uploads'), ('config.json', '.'), ('documentation.md', '.'), ('version.json', '.')],
+    datas=[
+        ('templates', 'templates'),
+        ('static', 'static'),
+        ('config.json', '.'),
+        ('documentation.md', '.'),
+        ('version.json', '.'),
+    ],
     hiddenimports=['flask', 'webview', 'pdfplumber', 'docx', 'markdown'],
     hookspath=[],
     hooksconfig={},
@@ -28,10 +34,7 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    icon='static/favicon.ico',
 )
 coll = COLLECT(
     exe,
@@ -41,10 +44,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='Sattmal',
-)
-app = BUNDLE(
-    coll,
-    name='Sattmal.app',
-    icon='assets/icon.icns',
-    bundle_identifier='com.sct.sattmal',
 )

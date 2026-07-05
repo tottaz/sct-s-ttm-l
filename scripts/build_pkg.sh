@@ -4,7 +4,7 @@
 APP_NAME="Sattmal"
 PKG_NAME="$APP_NAME-Installer.pkg"
 IDENTIFIER="com.sct.sattmal"
-VERSION="1.0.0"
+VERSION=$(python3 -c "import json; d=json.load(open('version.json')); print(d.get('version', '0.0.0'))")
 INSTALL_LOCATION="/Applications"
 
 echo "Building .pkg installer for $APP_NAME..."

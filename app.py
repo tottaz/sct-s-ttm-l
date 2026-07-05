@@ -1,5 +1,5 @@
 from flask import Flask
-from routes import signature_bp, get_flask_secret_key
+from routes import signature_bp, get_flask_secret_key, get_version_info
 from datetime import datetime
 
 app = Flask(__name__)
@@ -11,6 +11,15 @@ app.config.update(
 
 # Register blueprint
 app.register_blueprint(signature_bp)
+
+
+@app.context_processor
+def inject_version_info():
+    version_info = get_version_info()
+    return {
+        "app_version": version_info,
+        "app_version_label": f"v{version_info.get('version', '0.0.0')} ({version_info.get('build', 'dev')})",
+    }
 
 
 @app.template_filter('todatetime')

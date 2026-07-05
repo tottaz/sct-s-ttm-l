@@ -47,6 +47,12 @@ signature_bp = Blueprint("signature", __name__,
                          static_folder="static")
 
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_LANGUAGES = ["English", "Swedish"]
+DEFAULT_ANALYSIS_PROMPT = (
+    "You are an expert legal analyst specializing in contracts, warranties, and agreements. "
+    "Analyze the following document using a {style} communication style. "
+    "Write the entire response in {language}. Do not mention the selected output language."
+)
 SAFE_ID_RE = re.compile(r"^(signed_)?[0-9a-fA-F-]{36}$")
 ALLOWED_UPLOAD_EXTENSIONS = {'pdf', 'docx', 'txt', 'png', 'jpg', 'jpeg', 'csv', 'zip'}
 
@@ -107,6 +113,8 @@ def ensure_config_defaults():
         "vision_model": "",
         "custom_model_name": "",
         "storage_dir": os.path.join(DATA_BASE_DIR, "data"),
+        "languages": DEFAULT_LANGUAGES,
+        "analysis_prompt": DEFAULT_ANALYSIS_PROMPT,
         "categories": ["Contract", "Invoice", "Report", "Image", "Other"],
     }
     for key, value in defaults.items():
@@ -115,6 +123,12 @@ def ensure_config_defaults():
             changed = True
     if not config.get("flask_secret_key"):
         config["flask_secret_key"] = secrets.token_urlsafe(48)
+        changed = True
+    if not config.get("languages"):
+        config["languages"] = DEFAULT_LANGUAGES
+        changed = True
+    if not config.get("analysis_prompt"):
+        config["analysis_prompt"] = DEFAULT_ANALYSIS_PROMPT
         changed = True
     if changed:
         save_config()
@@ -125,6 +139,18 @@ ensure_config_defaults()
 
 def get_flask_secret_key() -> str:
     return config["flask_secret_key"]
+
+
+def get_version_info() -> dict:
+    base_path = getattr(sys, '_MEIPASS', os.getcwd())
+    version_path = os.path.join(base_path, "version.json")
+    fallback = {"version": "0.0.0", "build": "dev", "build_number": 0, "name": "Sattmal"}
+    try:
+        with open(version_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {**fallback, **data}
+    except Exception:
+        return fallback
 
 OLLAMA_BASE_URL = config.get("ollama_base_url", DEFAULT_OLLAMA_BASE_URL)
 # Config loading is done above, but we need to handle the case where salt isbytes
@@ -210,6 +236,24 @@ def get_required_model(capability: str = "chat") -> str:
     if not model:
         raise ValueError(f"No local {capability} model selected. Choose an Ollama model in Settings.")
     return model
+
+
+def normalize_languages(raw_languages) -> list:
+    if isinstance(raw_languages, str):
+        candidates = raw_languages.replace(",", "\n").splitlines()
+    else:
+        candidates = raw_languages or []
+
+    languages = []
+    for item in candidates:
+        language = str(item).strip()
+        if language and language not in languages:
+            languages.append(language)
+    return languages or list(DEFAULT_LANGUAGES)
+
+
+def configured_languages() -> list:
+    return normalize_languages(config.get("languages", DEFAULT_LANGUAGES))
 
 
 def ollama_is_installed() -> bool:
@@ -857,15 +901,23 @@ def settings():
         vision_model = request.form.get("vision_model")
         chat_model = request.form.get("chat_model", "").strip()
         custom_model_name = request.form.get("custom_model_name", "").strip()
+        languages = normalize_languages(request.form.get("languages", ""))
         translation_prompt = request.form.get("translation_prompt", "").strip()
-        analysis_prompt = request.form.get("analysis_prompt", "").strip()
+        analysis_prompt = request.form.get("analysis_prompt", "").strip() or DEFAULT_ANALYSIS_PROMPT
         previous_storage_dir = storage_root()
 
         try:
             storage_dir = validate_storage_dir(storage_dir or previous_storage_dir)
         except Exception as e:
             flash(f"Storage location is not writable: {e}", "danger")
-            return render_template("settings.html", config=config, ollama_models=ollama_models, ollama_status=ollama_status)
+            return render_template(
+                "settings.html",
+                config=config,
+                ollama_models=ollama_models,
+                ollama_status=ollama_status,
+                languages_text="\n".join(configured_languages()),
+                default_analysis_prompt=DEFAULT_ANALYSIS_PROMPT,
+            )
         
         for legacy_key in (
             "use_" + "open" + "ai",
@@ -873,6 +925,7 @@ def settings():
             "open" + "ai_model",
         ):
             config.pop(legacy_key, None)
+        config["languages"] = languages
         config["ollama_base_url"] = ollama_url
         config["storage_dir"] = storage_dir
         config["email"] = email
@@ -895,7 +948,14 @@ def settings():
         flash("Settings updated successfully.", "success")
         return redirect(url_for("signature.index"))
         
-    return render_template("settings.html", config=config, ollama_models=ollama_models, ollama_status=ollama_status)
+    return render_template(
+        "settings.html",
+        config=config,
+        ollama_models=ollama_models,
+        ollama_status=ollama_status,
+        languages_text="\n".join(configured_languages()),
+        default_analysis_prompt=DEFAULT_ANALYSIS_PROMPT,
+    )
 
 @signature_bp.route("/doc/send/<doc_id>", methods=["POST"])
 def doc_send(doc_id):
@@ -1311,6 +1371,7 @@ def save_signed_pdf():
 @signature_bp.route("/analyze_doc/<doc_id>", methods=["GET", "POST"])
 def analyze_doc(doc_id):
     doc_id = safe_doc_id(doc_id)
+    languages = configured_languages()
     meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         flash("Document metadata not found.", "danger")
@@ -1320,7 +1381,9 @@ def analyze_doc(doc_id):
         meta = json.load(f)
 
     if request.method == "POST":
-        language = request.form.get("language", "English")
+        language = request.form.get("language", languages[0])
+        if language not in languages:
+            language = languages[0]
         style = request.form.get("style", "layman")
         
         file_path = resolve_upload_path(meta)
@@ -1349,7 +1412,7 @@ def analyze_doc(doc_id):
             meta["analysis_style"] = style
             write_metadata(meta)
             
-            return render_template("docanalysis.html", doc=meta, analysis=html_analysis)
+            return render_template("docanalysis.html", doc=meta, analysis=html_analysis, languages=languages)
         except Exception as e:
             flash(f"Analysis failed: {e}", "danger")
             return redirect(url_for("signature.index"))
@@ -1373,7 +1436,7 @@ def analyze_doc(doc_id):
                 if not text.strip():
                     return jsonify({"success": False, "analysis": "Low or no text content found to analyze."})
 
-                analysis_text_raw = analyze_document_content(text)
+                analysis_text_raw = analyze_document_content(text, language=languages[0])
                 analysis_html = markdown.markdown(analysis_text_raw)
                 return jsonify({"success": True, "analysis": analysis_html})
             except Exception as e:
@@ -1383,12 +1446,13 @@ def analyze_doc(doc_id):
         return jsonify({"success": True, "analysis": analysis_html})
 
     # GET -> show analysis options or current analysis if exists
-    return render_template("docanalysis.html", doc=meta, analysis=analysis_html)
+    return render_template("docanalysis.html", doc=meta, analysis=analysis_html, languages=languages)
 
 
 @signature_bp.route("/translate_doc/<doc_id>", methods=["POST"])
 def translate_doc(doc_id):
     doc_id = safe_doc_id(doc_id)
+    languages = configured_languages()
     meta_path = metadata_path_for(doc_id)
     if not os.path.exists(meta_path):
         return jsonify({"success": False, "error": "Document metadata not found."}), 404
@@ -1401,8 +1465,12 @@ def translate_doc(doc_id):
     if not file_path:
         return jsonify({"success": False, "error": "Document file not found."}), 404
 
-    target_language = data.get("language", "English")
+    target_language = data.get("language", languages[0])
+    if target_language not in languages:
+        target_language = languages[0]
     source_language = data.get("source_language", "auto")
+    if source_language != "auto" and source_language not in languages:
+        source_language = "auto"
     show_extracted = data.get("show_extracted_text", False)
 
     # Get doc text

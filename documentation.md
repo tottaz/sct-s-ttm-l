@@ -25,6 +25,7 @@ Use Settings to choose:
 - Chat/Analysis Model: used for analysis, translation, document chat, and generated responses.
 - Vision Model: used for images and scanned PDFs.
 - Custom Trained Model Name: used only by the experimental custom model tools.
+- Languages: used by Analyse and Translate.
 
 No cloud AI provider is configured in the app.
 
@@ -84,6 +85,8 @@ Example chat questions:
 - What changed between my results from last year and this year?
 
 For scanned documents or images, select a local vision model in Settings.
+
+The language dropdowns come from Settings. Add one language per line to make it available in Analyse and Translate.
 
 ## Categories
 

@@ -4,8 +4,9 @@
 <div class="row justify-content-center">
     <div class="col-md-6">
         <div class="card shadow-sm">
-            <div class="card-header bg-primary text-white">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
                 <h5 class="mb-0">Application Settings</h5>
+                <a href="{{ url_for('signature.index') }}" class="btn btn-sm btn-outline-light">Documents</a>
             </div>
             <div class="card-body">
                 <form method="POST">
@@ -76,6 +77,13 @@
                     <h6 class="mb-3 text-primary">Custom Prompts</h6>
 
                     <div class="mb-3">
+                        <label for="languages" class="form-label fw-bold">Languages</label>
+                        <textarea class="form-control" id="languages" name="languages" rows="4"
+                            placeholder="One language per line">{{ languages_text }}</textarea>
+                        <div class="form-text">These languages appear in Analyse and Translate.</div>
+                    </div>
+
+                    <div class="mb-3">
                         <label for="translation_prompt" class="form-label fw-bold">Translation Prompt</label>
                         <textarea class="form-control" id="translation_prompt" name="translation_prompt" rows="3"
                             placeholder="Default prompt will be used if empty. Use {target_language} as placeholder.">{{ config.translation_prompt }}</textarea>
@@ -85,8 +93,8 @@
                     <div class="mb-3">
                         <label for="analysis_prompt" class="form-label fw-bold">Analysis Prompt</label>
                         <textarea class="form-control" id="analysis_prompt" name="analysis_prompt" rows="4"
-                            placeholder="Default prompt will be used if empty. Use {language} and {style} as placeholders.">{{ config.analysis_prompt }}</textarea>
-                        <div class="form-text">Customize the instructions for document analysis.</div>
+                            placeholder="{{ default_analysis_prompt }}">{{ config.analysis_prompt }}</textarea>
+                        <div class="form-text">Use {language} for the output language and {style} for the communication style.</div>
                     </div>
 
                     <hr class="my-4">
@@ -113,7 +121,7 @@
 
                     <div class="d-grid gap-2">
                         <button type="submit" class="btn btn-primary">Save Settings</button>
-                        <a href="{{ url_for('signature.index') }}" class="btn btn-outline-secondary">Cancel</a>
+                        <a href="{{ url_for('signature.index') }}" class="btn btn-outline-secondary">Back to Documents</a>
                     </div>
                 </form>
             </div>

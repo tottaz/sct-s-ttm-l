@@ -59,12 +59,9 @@
                                 <div class="mb-3">
                                     <label for="language" class="form-label">Language</label>
                                     <select class="form-select" id="language" name="language">
-                                        <option value="English" {% if doc.analysis_language=='English' %}selected{%
-                                            endif %}>
-                                            English</option>
-                                        <option value="Swedish" {% if doc.analysis_language=='Swedish' %}selected{%
-                                            endif %}>
-                                            Swedish</option>
+                                        {% for language in languages %}
+                                        <option value="{{ language }}" {% if doc.analysis_language==language %}selected{% endif %}>{{ language }}</option>
+                                        {% endfor %}
                                     </select>
                                 </div>
                                 <div class="mb-3">
@@ -92,23 +89,17 @@
                                 <label for="source-language" class="form-label">Source Language</label>
                                 <select class="form-select" id="source-language">
                                     <option value="auto">Auto-detect</option>
-                                    <option value="English">English</option>
-                                    <option value="Swedish">Swedish</option>
-                                    <option value="Dutch">Dutch</option>
-                                    <option value="Spanish">Spanish</option>
-                                    <option value="German">German</option>
-                                    <option value="French">French</option>
+                                    {% for language in languages %}
+                                    <option value="{{ language }}">{{ language }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                             <div class="mb-3">
                                 <label for="trans-language" class="form-label">Target Language</label>
                                 <select class="form-select" id="trans-language">
-                                    <option value="English">English</option>
-                                    <option value="Swedish">Swedish</option>
-                                    <option value="Dutch">Dutch</option>
-                                    <option value="Spanish">Spanish</option>
-                                    <option value="German">German</option>
-                                    <option value="French">French</option>
+                                    {% for language in languages %}
+                                    <option value="{{ language }}">{{ language }}</option>
+                                    {% endfor %}
                                 </select>
                             </div>
                             <div class="mb-3 form-check">

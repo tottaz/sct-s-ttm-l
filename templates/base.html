@@ -18,6 +18,7 @@
     <div class="container-fluid">
       <a class="navbar-brand" href="{{ url_for('signature.index') }}">Sattmal</a>
       <div class="navbar-nav ms-auto">
+        <span class="navbar-text text-light small me-3">{{ app_version_label }}</span>
         <a class="nav-link" href="{{ url_for('signature.documentation') }}">
           <i class="bi bi-file-earmark-text"></i> Documentation
         </a>
